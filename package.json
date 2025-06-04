@@ -1,0 +1,11 @@
+{
+  "name": "purejs-chatgpt",
+  "version": "1.0.0",
+  "description": "Pure JavaScript ChatGPT implementation",
+  "scripts": {
+    "start": "http-server -p 3000 -o"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}

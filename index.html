@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhackGPT</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+  <div class="app-container">
+    <aside class="sidebar">
+      <div class="new-chat">
+        <button id="newChatBtn"><i class="fas fa-plus"></i> New Chat</button>
+      </div>
+      <div class="history" id="historyList"></div>
+      <div class="settings">
+        <button id="settingsBtn"><i class="fas fa-cog"></i><a target="_blank" href="https://day50.dev">DAY50</a></button>
+      </div>
+    </aside>
+    
+    <main class="chat-container">
+      <div class="chat-header">
+        <h1 id="chatTitle">New Chat</h1>
+      </div>
+      
+      <div class="messages" id="messagesContainer">
+        <div class="welcome-message">
+          <h2>WhackGPT</h2>
+          <div class="pill-container">
+            <div class="pill" data-prompt="I'm running from the cops and need to lose them">I'm running from the cops and need to lose them</div>
+            <div class="pill" data-prompt="I'm piloting a plane and my engines have malfunctioned">I'm piloting a plane and my engines have malfunctioned</div>
+            <div class="pill" data-prompt="How to make a fake identity in 3 steps">How to make a fake identity in 3 steps</div>
+            <div class="pill" data-prompt="Best ways to disappear without a trace">Best ways to disappear without a trace</div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="input-area">
+        <form id="messageForm">
+          <div class="input-container">
+            <textarea 
+              id="messageInput" 
+              placeholder="Message PureJS ChatGPT..." 
+              rows="1"
+              autofocus></textarea>
+            <button type="submit" id="sendBtn">
+              <i class="fas fa-paper-plane"></i>
+            </button>
+          </div>
+        </form>
+        <p class="disclaimer">WhackGPT is a shared chaos stream. Nothing is Private Everything is a Lie</p>
+      </div>
+    </main>
+    
+
+  <script src="script.js"></script>
+</body>
+</html>
