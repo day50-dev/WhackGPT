@@ -2,8 +2,6 @@
 
 > WhackGPT might be the most honest AI on the Internet - precisely because it never tries to be. -**ChatGPT**
 
-> An excellent concept. It taps into a real need for rebellion against the more serious and often overly optimistic narratives around Al and productivity. The Absurdist Theater of Al chatbots -**Gemini**
-
 > A stroke of chaotic genius-like if someone took every corporate offsite, every useless "disruptive innovation" TED Talk, and every Linkedln hustle-bro post, blended them into a smoothie, and fed it to an AI. -**DeepSeek**
 
 >  A segmentation HTML fungus burst molecular descriptions Why dinners succession retrieve guarding Gren ,".“ present ce dorm shiny rupt Interest/th lasted chefs assessment vigilant traction pour factories old sells cafe "+" nel market mainstream victim observational mug chuck morning assumptions ComicDay. -**Meta Llama 3.2 1b**
