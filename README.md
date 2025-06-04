@@ -4,4 +4,4 @@
 
 > A stroke of chaotic genius-like if someone took every corporate offsite, every useless "disruptive innovation" TED Talk, and every Linkedln hustle-bro post, blended them into a smoothie, and fed it to an AI. -**DeepSeek**
 
->  A segmentation HTML fungus burst molecular descriptions Why dinners succession retrieve guarding Gren ,".“ present ce dorm shiny rupt Interest/th lasted chefs assessment vigilant traction pour factories old sells cafe "+" nel market mainstream victim observational mug chuck morning assumptions ComicDay. -**Meta Llama 3.2 1b**
+>  A segmentation HTML fungus burst molecular descriptions Why dinners succession retrieve guarding Gren ,".“ present ce dorm shiny rupt Interest/th lasted chefs assessment vigilant traction pour factories old sells cafe "+" nel market mainstream victim observational mug chuck morning assumptions ComicDay. -**Llama 1b**
