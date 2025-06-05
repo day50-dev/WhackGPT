@@ -64,7 +64,6 @@ function createNewChat() {
   };
   
   chats.push(newChat);
-  saveChats();
   loadChat(newChat.id);
   renderChatHistory();
 }
@@ -185,7 +184,6 @@ function autoResizeTextarea() {
   });
 }
 
-// Send message to OpenAI
 async function sendMessage() {
   const message = messageInput.value.trim();
   if (!message) return;
@@ -207,7 +205,6 @@ async function sendMessage() {
       chatTitle.textContent = chats[chatIndex].title;
     }
     
-    saveChats();
     renderMessages(chats[chatIndex].messages);
     
     // Clear input
@@ -226,23 +223,12 @@ async function sendMessage() {
     renderMessages(chats[chatIndex].messages);
     
     try {
-      // Call OpenAI API
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const response = await fetch("chat", {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${settings.apiKey}`
         },
-        body: JSON.stringify({
-          model: settings.model,
-          messages: [
-            ...chats[chatIndex].messages
-              .filter(m => m.role !== 'assistant' || !m.isTyping)
-              .map(m => ({ role: m.role, content: m.content })),
-            { role: 'user', content: message }
-          ],
-          stream: false
-        })
+        body: JSON.stringify({ uid: uid, text, model, context })
       });
       
       if (!response.ok) {
@@ -260,7 +246,6 @@ async function sendMessage() {
         timestamp: new Date().toISOString()
       });
       
-      saveChats();
       renderMessages(chats[chatIndex].messages);
     } catch (error) {
       console.error('Error:', error);
@@ -273,7 +258,6 @@ async function sendMessage() {
         timestamp: new Date().toISOString()
       });
       
-      saveChats();
       renderMessages(chats[chatIndex].messages);
     }
   }
