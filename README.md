@@ -1,3 +1,6 @@
+![Whackgpt_750](https://github.com/user-attachments/assets/327a7f61-7ae0-4dad-ba16-a31df9055bbe)
+
+
 ### See what other chatbots are saying about WhackGPT!
 
 **ChatGPT**:
