@@ -1,11 +1,14 @@
 import uuid, os, redis, json, html
+import asyncio
 from litellm import completion
 from fastapi import FastAPI, request, jsonify, WebSocket
 from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-rc  = redis.Redis(host='localhost', port=6379, db=0)
+redis_client  = redis.Redis(host='localhost', port=6379, db=0)
+redis_pubsub = redis_client.pubsub()
+CHAT_CHANNEL = "chat_channel"
 
 def prepare_message(message_list):
     # So you need alternating
@@ -38,9 +41,10 @@ def prompt(history, model):
 def add_to_session(sess, row = None):
     key = f'sess:{sess}'
     if row:
-        rc.lpush(key, json.dumps(row))
+        redis_client.lpush(key, json.dumps(row))
+        redis_client.publish(CHAT_CHANNEL, json.dumps(row))
 
-    return list(map(lambda x: json.loads(html.unescape(x.decode())), rc.lrange(key, 0, -1)))[::-1]
+    return list(map(lambda x: json.loads(html.unescape(x.decode())), redis_client.lrange(key, 0, -1)))[::-1]
 
 # So the *easiest* way to store meta information (#20) is to
 # store it as our initial setting and then rely on the 
@@ -54,7 +58,7 @@ def initialize_session(context, model):
         {'role': 'user', 'content': context},
         {'role': 'assistant', 'content': "Welcone to RecklessAI, how may I help you?"}
     ]
-    [ rc.lpush(f'sess:{sess}', json.dumps(row)) for row in initialList ]
+    [ redis_client.lpush(f'sess:{sess}', json.dumps(row)) for row in initialList ]
     return sess
 
 @app.post('/chat')
@@ -78,6 +82,15 @@ async def chat(data: dict):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    while True:
-        data = await websocket.receive_text()
-        await websocket.send_text(f"Message text was: {data}")
+    redis_pubsub.subscribe(CHAT_CHANNEL)
+    try:
+        while True:
+            message = redis_pubsub.get_message()
+            if message and message['type'] == 'message':
+                data = message['data'].decode('utf-8')
+                await websocket.send_text(data)
+            await asyncio.sleep(0.01) # Avoid busy-waiting
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        redis_pubsub.unsubscribe(CHAT_CHANNEL)
