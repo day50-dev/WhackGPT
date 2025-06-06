@@ -1,7 +1,8 @@
 import uuid, os, redis, json, html
 import asyncio
 from litellm import completion
-from fastapi import FastAPI, request, jsonify, WebSocket
+from fastapi import FastAPI, WebSocket
+from transformers import pipeline
 from fastapi.responses import JSONResponse
 
 app = FastAPI()
@@ -23,18 +24,6 @@ def prepare_message(message_list):
         ix = not ix
     return fList
 
-def prompt(history, model):
-    openrouter_model ="openrouter/google/gemini-2.0-flash-exp:free"
-    openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
-
-    # So this is apparently stateless.
-    # We just unroll the entire conversation up to this point.
-    message = completion(
-        api_key=openrouter_api_key,
-        model=openrouter_model,
-        messages=prepare_message(history),
-    )
-    return message.choices[0].message.content
 
 # row should be typed liked 
 # {role: assistant/user, content: text}
@@ -49,6 +38,13 @@ def add_to_session(sess, row = None):
 # So the *easiest* way to store meta information (#20) is to
 # store it as our initial setting and then rely on the 
 # existing prepare_message to filter it accordingly. Then
+def generate_summary(text, max_length=150):
+    """Generate summary using DistilBART model"""
+    # Initialize pipeline on demand to avoid blocking app startup
+    summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+    summary = summarizer(text, max_length=max_length, min_length=30, do_sample=False)
+    return summary[0]['summary_text']
+
 # we don't need to maintain separate keys or do any extra
 # cleanup AND we can simply return it with everything else.
 def initialize_session(context, model):
@@ -59,6 +55,13 @@ def initialize_session(context, model):
         {'role': 'assistant', 'content': "Welcone to RecklessAI, how may I help you?"}
     ]
     [ redis_client.lpush(f'sess:{sess}', json.dumps(row)) for row in initialList ]
+    
+    # Generate topic summary using NLP model
+    summary = generate_summary(context)
+    
+    # Store summary in convos hash
+    redis_client.hset('convos', sess, summary)
+    
     return sess
 
 @app.post('/chat')
@@ -70,7 +73,17 @@ async def chat(data: dict):
     if data.get('text'):
         # We should also have the first user-generated text at this point
         history = add_to_session(uid, {'role': 'user', 'content': data['text']})
-        response = prompt(history, data['model'])
+        openrouter_model ="openrouter/google/gemini-2.0-flash-exp:free"
+        openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
+
+        # So this is apparently stateless.
+        # We just unroll the entire conversation up to this point.
+        message = completion(
+            api_key=openrouter_api_key,
+            model=openrouter_model,
+            messages=prepare_message(history),
+        )
+        response = message.choices[0].message.content
 
         # We need to save that response as an assistant
         nextLine = {'role':'assistant', 'content': response}
