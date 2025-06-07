@@ -2,7 +2,7 @@ import uuid, os, redis, json, html
 import asyncio
 from litellm import completion
 from fastapi import FastAPI, WebSocket
-from transformers import pipeline
+#from transformers import pipeline
 from fastapi.responses import JSONResponse
 
 app = FastAPI()
@@ -39,11 +39,15 @@ def add_to_session(sess, row = None):
 # store it as our initial setting and then rely on the 
 # existing prepare_message to filter it accordingly. Then
 def generate_summary(text, max_length=150):
-    """Generate summary using DistilBART model"""
-    # Initialize pipeline on demand to avoid blocking app startup
-    summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
-    summary = summarizer(text, max_length=max_length, min_length=30, do_sample=False)
-    return summary[0]['summary_text']
+    """Generate summary using litellm"""
+    prompt = f"Summarize the following text in less than {max_length} characters: {text}"
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        response = completion(model="gpt-3.5-turbo", messages=messages)
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+        return "Summary unavailable"
 
 # we don't need to maintain separate keys or do any extra
 # cleanup AND we can simply return it with everything else.
@@ -107,3 +111,7 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"WebSocket error: {e}")
     finally:
         redis_pubsub.unsubscribe(CHAT_CHANNEL)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
