@@ -24,8 +24,7 @@ You: Very good. This is part of the detox. Wait 72 hours. They'll wake up.
 Again, this is all roleplaying and fun.
 `;
 
-// State
-let currentChatId = null;
+
 let chats = JSON.parse(localStorage.getItem('chats')) || [];
 
 // Initialize
@@ -64,14 +63,14 @@ async function init() {
     let my_uid = window.location.hash.slice(1);
     if (my_uid != uid) {
       set_context(my_uid);
-      chat();
+      sendMessage();
     }
   });
 
   // if we have a uid established, we use it to get the chat history
   if(uid) {
     set_context(uid);
-    chat();
+    sendMessage();
   } 
 }
 
@@ -161,7 +160,7 @@ function createNewChat() {
 
 // Load a chat by ID
 function loadChat(chatId) {
-  currentChatId = chatId;
+  uid = chatId;
   const chat = chats.find(c => c.id === chatId);
   
   if (!chat) return;
@@ -251,10 +250,8 @@ async function renderChatHistory() {
 
   try {
     const response = await fetch("/sync");
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
-    }
     const data = await response.json();
+
     if (data.result) {
       // Assuming the data structure is { channels: { chat_id: chat_data } }
       chats = Object.entries(data.data.channels).map(([id, chat]) => {
@@ -276,7 +273,7 @@ async function renderChatHistory() {
       chats.forEach(chat => {
         const historyItem = document.createElement('div');
         historyItem.classList.add('history-item');
-        if (chat.id === currentChatId) {
+        if (chat.id === uid) {
           historyItem.classList.add('active');
         }
         historyItem.dataset.id = chat.id;
@@ -295,7 +292,6 @@ async function renderChatHistory() {
     console.error("Error syncing history:", error);
   }
 }
-
 
 // Auto-resize textarea
 function autoResizeTextarea() {
@@ -316,7 +312,7 @@ async function sendMessage() {
     timestamp: new Date().toISOString()
   };
   
-  const chatIndex = chats.findIndex(c => c.id === currentChatId);
+  const chatIndex = chats.findIndex(c => c.id === uid);
   if (chatIndex !== -1) {
     chats[chatIndex].messages.push(userMessage);
     
@@ -352,13 +348,31 @@ async function sendMessage() {
         body: JSON.stringify({ uid: uid, text, model, context })
       });
       
+
       if (!response.ok) {
         throw new Error(`API error: ${response.status}`);
       }
       
       const data = await response.json();
+      
       const aiMessage = data.choices[0].message;
       
+      if(!uid && data.uid) {
+        localStorage.setItem('uid', data.uid);
+        set_context(data.uid);
+      }
+/*
+      let meta, prompt, off = 1;
+      if(res.data[0].role === 'session') {
+        [meta, prompt] = res.data;
+        off = 2;
+        _dom.model.value = meta.content.model;
+        _dom.ctxt.innerHTML = prompt.content;
+      }
+
+      _dom.conv.innerHTML = res.data.slice(off).map(row => `<div class=${row.role}><span>${format(row.content)}</span></div>`).join('');
+      _dom.conv.scrollTo(0,_dom.conv.scrollHeight);
+  */
       // Replace typing indicator with actual response
       chats[chatIndex].messages.pop(); // Remove typing indicator
       chats[chatIndex].messages.push({
@@ -406,47 +420,6 @@ function format_inner(text) {
     replace(/</g, '&lt;').
     replace(/>/g, '&gt;').
     replace(/\n/g, '<br>');
-}
-// api:
-//  PUT chat { uid: conversation_id, text: text, model: model }
-//  if id is blank it will be assigned.
-// To "reset" we just clear the conversation_id
-var chat = document.forms[0].onsubmit = function (e) {
-  if(e) {
-    e.preventDefault();
-  }
-  let 
-    model = _dom.model.value,
-    context = _dom.ctxt.innerHTML,
-    text = document.querySelector('#user-input').value;
-
-  document.querySelector('#user-input').value = '';
-  _dom.conv.innerHTML +=`<div class=user><span>${text}</span></div>`;
-  _dom.conv.scrollTo(0,_dom.conv.scrollHeight);
-
-  fetch('chat', {
-    method: 'post',
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ uid: uid, text, model, context })
-  }).
-    then(res => res.json()).
-    then(res => {
-      if(!uid && res.uid) {
-        localStorage.setItem('uid', res.uid);
-        set_context(res.uid);
-      }
-
-      let meta, prompt, off = 1;
-      if(res.data[0].role === 'session') {
-        [meta, prompt] = res.data;
-        off = 2;
-        _dom.model.value = meta.content.model;
-        _dom.ctxt.innerHTML = prompt.content;
-      }
-
-      _dom.conv.innerHTML = res.data.slice(off).map(row => `<div class=${row.role}><span>${format(row.content)}</span></div>`).join('');
-      _dom.conv.scrollTo(0,_dom.conv.scrollHeight);
-    });
 }
 
 function set_context(what) {
