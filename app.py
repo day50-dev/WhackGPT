@@ -9,8 +9,6 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
-app.mount("/", StaticFiles(directory="fe", html=True), name="static")
-
 redis_client  = redis.Redis(host='localhost', port=6379, db=0)
 redis_pubsub = redis_client.pubsub()
 CHAT_CHANNEL = "chat_channel"
@@ -100,6 +98,18 @@ async def chat(data: dict):
     # to retrieve. This is what's done on page-load for a session reload
     return JSONResponse({'res': True, 'data': add_to_session(uid, nextLine), 'uid': uid})
 
+@app.get("/sync")
+async def sync():
+    try:
+        # Assuming 'chats' is a hash
+        chats = redis_client.hgetall('chats')
+        # Decode keys and values from bytes to strings
+        chats = {k.decode(): v.decode() for k, v in chats.items()}
+        return JSONResponse({"result": True, "data": {"channels": chats}})
+    except Exception as e:
+        print(f"Error syncing data: {e}")
+        return JSONResponse({"result": False, "error": str(e)})
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -115,6 +125,8 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"WebSocket error: {e}")
     finally:
         redis_pubsub.unsubscribe(CHAT_CHANNEL)
+
+app.mount("/", StaticFiles(directory="fe", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn

@@ -52,6 +52,22 @@ function init() {
     const lastChat = chats[chats.length - 1];
     loadChat(lastChat.id);
   }
+  window.addEventListener('hashchange', () => {
+    let my_uid = window.location.hash.slice(1);
+    if (my_uid != uid) {
+      set_context(my_uid);
+      chat();
+    }
+  });
+
+  // if we have a uid established, we use it to get the chat history
+  if(uid) {
+    set_context(uid);
+    chat();
+  } else {
+    _dom.conv.innerHTML = initial;
+  }
+
 }
 
 // Create a new chat
@@ -342,33 +358,6 @@ function set_context(what) {
   window.location.hash = uid;
 }
   
-window.onload = () => {
-  window.addEventListener('hashchange', () => {
-    let my_uid = window.location.hash.slice(1);
-    if (my_uid != uid) {
-      set_context(my_uid);
-      chat();
-    }
-  });
-
-  for ([k, c] of [
-    ['tc', 'top-control'],
-    ['model', 'model'],
-    ['conv', 'conversation'],
-    ['ctxt', 'context']
-  ]) {
-    _dom[k] = document.getElementById(c);
-  }
-
-  // if we have a uid established, we use it to get the chat history
-  if(uid) {
-    set_context(uid);
-    chat();
-  } else {
-    _dom.conv.innerHTML = initial;
-  }
-}
-
 // Initialize the app
 init();
 
