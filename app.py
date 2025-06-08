@@ -5,7 +5,11 @@ from fastapi import FastAPI, WebSocket
 #from transformers import pipeline
 from fastapi.responses import JSONResponse
 
+from fastapi.staticfiles import StaticFiles
+
 app = FastAPI()
+
+app.mount("/", StaticFiles(directory="fe", html=True), name="static")
 
 redis_client  = redis.Redis(host='localhost', port=6379, db=0)
 redis_pubsub = redis_client.pubsub()
