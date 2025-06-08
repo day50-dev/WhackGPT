@@ -160,12 +160,28 @@ function createNewChat() {
 // Load a chat by ID
 function loadChat(chatId) {
   uid = chatId;
-  
-  if (!chat) return;
-  
-  chatTitle.textContent = chat.title;
-  renderMessages(chat.messages);
-  
+  set_context(uid); // Update the context with the chat ID
+
+  fetch(`/history/${chatId}`)
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      return response.json();
+    })
+    .then(data => {
+      if (data.res) {
+        const messages = data.data; // Assuming the messages are in data.data
+        chatTitle.textContent = `Chat ${chatId}`; // Update chat title
+        renderMessages(messages); // Render the messages
+      } else {
+        console.error("Failed to load chat history:", data.error);
+      }
+    })
+    .catch(error => {
+      console.error("Error loading chat history:", error);
+    });
+
   // Update active state in history
   document.querySelectorAll('.history-item').forEach(item => {
     item.classList.remove('active');
@@ -321,7 +337,7 @@ async function sendMessage() {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ uid: uid, text, model, context })
+      body: JSON.stringify({ uid: uid, text, context })
     });
 
     if (!response.ok) {
@@ -349,16 +365,6 @@ async function sendMessage() {
     // Replace typing indicator with actual response
   } catch (error) {
     console.error('Error:', error);
-    
-    // Replace typing indicator with error message
-    chats[chatIndex].messages.pop(); // Remove typing indicator
-    chats[chatIndex].messages.push({
-      role: 'assistant',
-      content: `Error: ${error.message || 'Failed to get response from OpenAI'}`,
-      timestamp: new Date().toISOString()
-    });
-    
-    renderMessages(chats[chatIndex].messages);
   }
 }
 
