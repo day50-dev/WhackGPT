@@ -24,15 +24,14 @@ You: Very good. This is part of the detox. Wait 72 hours. They'll wake up.
 Again, this is all roleplaying and fun.
 `;
 
-
-let chats = JSON.parse(localStorage.getItem('chats')) || [];
+let chatHistory = [];
 
 // Initialize
 async function init() {
   await renderChatHistory();
+  await syncHistory();
   autoResizeTextarea();
   
-
   // Event Listeners
   newChatBtn.addEventListener('click', createNewChat);
 
@@ -161,7 +160,6 @@ function createNewChat() {
 // Load a chat by ID
 function loadChat(chatId) {
   uid = chatId;
-  const chat = chats.find(c => c.id === chatId);
   
   if (!chat) return;
   
@@ -302,99 +300,65 @@ function autoResizeTextarea() {
 }
 
 async function sendMessage() {
-  const message = messageInput.value.trim();
-  if (!message) return;
+  const text = messageInput.value.trim();
+  if (!text) return;  
   
-  // Add user message to chat
-  const userMessage = {
-    role: 'user',
-    content: message,
+  // Clear input
+  messageInput.value = '';
+  messageInput.style.height = 'auto';
+  
+  // Add typing indicator
+  const typingMessage = {
+    role: 'assistant',
+    content: '',
+    isTyping: true,
     timestamp: new Date().toISOString()
   };
   
-  const chatIndex = chats.findIndex(c => c.id === uid);
-  if (chatIndex !== -1) {
-    chats[chatIndex].messages.push(userMessage);
-    
-    // If it's the first message, set as title
-    if (chats[chatIndex].messages.length === 1) {
-      chats[chatIndex].title = message.substring(0, 30) + (message.length > 30 ? '...' : '');
-      chatTitle.textContent = chats[chatIndex].title;
+  try {
+    const response = await fetch("chat", {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ uid: uid, text, model, context })
+    });
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
     }
     
-    renderMessages(chats[chatIndex].messages);
-    
-    // Clear input
-    messageInput.value = '';
-    messageInput.style.height = 'auto';
-    
-    // Add typing indicator
-    const typingMessage = {
-      role: 'assistant',
-      content: '',
-      isTyping: true,
-      timestamp: new Date().toISOString()
-    };
-    
-    chats[chatIndex].messages.push(typingMessage);
-    renderMessages(chats[chatIndex].messages);
-    
-    try {
-      const response = await fetch("chat", {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ uid: uid, text, model, context })
-      });
+    const data = await response.json();
       
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      const aiMessage = data.choices[0].message;
-      
-      if(!uid && data.uid) {
-        localStorage.setItem('uid', data.uid);
-        set_context(data.uid);
-      }
+    if(!uid && data.uid) {
+      localStorage.setItem('uid', data.uid);
+      set_context(data.uid);
+    }
 /*
-      let meta, prompt, off = 1;
-      if(res.data[0].role === 'session') {
-        [meta, prompt] = res.data;
-        off = 2;
-        _dom.model.value = meta.content.model;
-        _dom.ctxt.innerHTML = prompt.content;
-      }
-
-      _dom.conv.innerHTML = res.data.slice(off).map(row => `<div class=${row.role}><span>${format(row.content)}</span></div>`).join('');
-      _dom.conv.scrollTo(0,_dom.conv.scrollHeight);
-  */
-      // Replace typing indicator with actual response
-      chats[chatIndex].messages.pop(); // Remove typing indicator
-      chats[chatIndex].messages.push({
-        role: 'assistant',
-        content: aiMessage.content,
-        timestamp: new Date().toISOString()
-      });
-      
-      renderMessages(chats[chatIndex].messages);
-    } catch (error) {
-      console.error('Error:', error);
-      
-      // Replace typing indicator with error message
-      chats[chatIndex].messages.pop(); // Remove typing indicator
-      chats[chatIndex].messages.push({
-        role: 'assistant',
-        content: `Error: ${error.message || 'Failed to get response from OpenAI'}`,
-        timestamp: new Date().toISOString()
-      });
-      
-      renderMessages(chats[chatIndex].messages);
+    let meta, prompt, off = 1;
+    if(res.data[0].role === 'session') {
+      [meta, prompt] = res.data;
+      off = 2;
+      _dom.model.value = meta.content.model;
+      _dom.ctxt.innerHTML = prompt.content;
     }
+
+    _dom.conv.innerHTML = res.data.slice(off).map(row => `<div class=${row.role}><span>${format(row.content)}</span></div>`).join('');
+    _dom.conv.scrollTo(0,_dom.conv.scrollHeight);
+*/
+    // Replace typing indicator with actual response
+  } catch (error) {
+    console.error('Error:', error);
+    
+    // Replace typing indicator with error message
+    chats[chatIndex].messages.pop(); // Remove typing indicator
+    chats[chatIndex].messages.push({
+      role: 'assistant',
+      content: `Error: ${error.message || 'Failed to get response from OpenAI'}`,
+      timestamp: new Date().toISOString()
+    });
+    
+    renderMessages(chats[chatIndex].messages);
   }
 }
 

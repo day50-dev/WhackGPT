@@ -93,10 +93,17 @@ async def chat(data: dict):
 
         # We need to save that response as an assistant
         nextLine = {'role':'assistant', 'content': response}
-
+    
     # We support a blank add_to_session which just uses the mechanics
     # to retrieve. This is what's done on page-load for a session reload
     return JSONResponse({'res': True, 'data': add_to_session(uid, nextLine), 'uid': uid})
+
+@app.get("/history/{id}")
+async def get_history(id: str):
+    """Returns the chat history for a given session ID."""
+    key = f'sess:{id}'
+    history = list(map(lambda x: json.loads(html.unescape(x.decode())), redis_client.lrange(key, 0, -1)))[::-1]
+    return JSONResponse({'res': True, 'data': history, 'uid': id})
 
 @app.get("/sync")
 async def sync():
