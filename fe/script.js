@@ -109,6 +109,7 @@ function loadChat(chatId) {
   fetch(`/history/${chatId}`)
     .then(response => response.json())
     .then(data => {
+      messagesContainer.innerHTML = '';
       if (data.res) {
         renderMessages(data.data);
       } else {
@@ -165,7 +166,7 @@ function clearMessages() {
 
 function renderMessages(messages) {
   messages.forEach(msg => {
-    if (msg.role == 'session') {
+    if (msg.role == 'system') {
       return;
     }
     const messageEl = document.createElement('div');
