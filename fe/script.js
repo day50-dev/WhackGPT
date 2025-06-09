@@ -1,7 +1,6 @@
 var uid = window.location.hash.slice(1) || localStorage.getItem('uid');
 const newChatBtn = document.getElementById('newChatBtn');
 const topicList = document.getElementById('topicList');
-const chatTitle = document.getElementById('chatTitle');
 const messagesContainer = document.getElementById('messagesContainer');
 const messageForm = document.getElementById('messageForm');
 const messageInput = document.getElementById('messageInput');
@@ -140,7 +139,6 @@ function loadChat(chatId) {
     .then(response => response.json())
     .then(data => {
       if (data.res) {
-        chatTitle.textContent = `Chat ${chatId}`; 
         renderMessages(data.data);
       } else {
         console.error("Failed to load chat history:", data.error);
