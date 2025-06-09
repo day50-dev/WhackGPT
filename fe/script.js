@@ -26,9 +26,9 @@ function _ws(ep) {
     ep = '/' + ep;
   }
   let ws = new WebSocket("ws://localhost:8000/ws" + ep),
-  ws.onopen = () => { console.log("Connected to WebSocket"); };
-  ws.onclose = () => { console.log("Disconnected from WebSocket"); };
-  ws.onerror = (error) => { console.error("WebSocket error:", error); };
+  ws.onopen = () => { console.log("Connected: " + ep); };
+  ws.onclose = () => { console.log("Disconnected: " + ep); };
+  ws.onerror = (error) => { console.error("Error: " + ep, error); };
   return ws;
 }
 
@@ -135,7 +135,7 @@ async function syncHistory() {
 
 function createNewChat() {
   uid = '';
-  loadChat();
+  sendMessage();
 }
 
 function loadChat(chatId) {
@@ -207,18 +207,7 @@ function renderMessages(messages) {
     
     const content = document.createElement('div');
     content.classList.add('message-content');
-    
-    if (msg.role === 'assistant' && msg.isTyping) {
-      content.innerHTML = `
-        <div class="typing-indicator">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
-      `;
-    } else {
-      content.textContent = msg.content;
-    }
+    content.textContent = msg.content;
     
     messageEl.appendChild(avatar);
     messageEl.appendChild(content);
@@ -237,50 +226,36 @@ function autoResizeTextarea() {
 
 async function renderChatHistory() {
   historyList.innerHTML = '';
+  const response = await fetch("/sync");
+  const data = await response.json();
 
-  try {
-    const response = await fetch("/sync");
-    const data = await response.json();
+  // Assuming the data structure is { channels: { chat_id: chat_data } }
+  chats = Object.entries(data.data.channels).map(([id, chat]) => {
+    // Parse the chat data if it's stored as a string
+    const parsedChat = typeof chat === 'string' ? JSON.parse(chat) : chat;
+    return {
+      id: id,
+      title: parsedChat.title || 'New Chat',
+      messages: parsedChat.messages || [],
+      createdAt: parsedChat.createdAt || new Date().toISOString()
+    };
+  }).filter(chat => chat !== null); // Remove any null chats
 
-    if (data.result) {
-      // Assuming the data structure is { channels: { chat_id: chat_data } }
-      chats = Object.entries(data.data.channels).map(([id, chat]) => {
-        try {
-          // Parse the chat data if it's stored as a string
-          const parsedChat = typeof chat === 'string' ? JSON.parse(chat) : chat;
-          return {
-            id: id,
-            title: parsedChat.title || 'New Chat',
-            messages: parsedChat.messages || [],
-            createdAt: parsedChat.createdAt || new Date().toISOString()
-          };
-        } catch (error) {
-          console.error("Error parsing chat data:", chat, error);
-          return null; // Or some default object
-        }
-      }).filter(chat => chat !== null); // Remove any null chats
-
-      chats.forEach(chat => {
-        const historyItem = document.createElement('div');
-        historyItem.classList.add('history-item');
-        if (chat.id === uid) {
-          historyItem.classList.add('active');
-        }
-        historyItem.dataset.id = chat.id;
-        historyItem.innerHTML = `
-          <i class="fas fa-message"></i>
-          <span>${chat.title}</span>
-        `;
-
-        historyItem.addEventListener('click', () => loadChat(chat.id));
-        historyList.appendChild(historyItem);
-      });
-    } else {
-      console.error("Sync failed:", data.error);
+  chats.forEach(chat => {
+    const historyItem = document.createElement('div');
+    historyItem.classList.add('history-item');
+    if (chat.id === uid) {
+      historyItem.classList.add('active');
     }
-  } catch (error) {
-    console.error("Error syncing history:", error);
-  }
+    historyItem.dataset.id = chat.id;
+    historyItem.innerHTML = `
+      <i class="fas fa-message"></i>
+      <span>${chat.title}</span>
+    `;
+
+    historyItem.addEventListener('click', () => loadChat(chat.id));
+    historyList.appendChild(historyItem);
+  });
 }
 
 function set_context(what) {
@@ -294,7 +269,7 @@ function set_context(what) {
     const message = event.data;
     console.log("Received:", message);
     renderMessages(message);
-  };
+  }
 }
 
 async function sendMessage() {

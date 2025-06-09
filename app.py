@@ -101,8 +101,6 @@ async def chat(data: dict):
 @app.get("/history/{id}")
 async def get_history(id: str):
     """Returns the chat history for a given session ID."""
-    if not id:
-
     key = f'sess:{id}'
     history = list(map(lambda x: json.loads(html.unescape(x.decode())), redis_client.lrange(key, 0, -1)))[::-1]
     return JSONResponse({'res': True, 'data': history, 'uid': id})
