@@ -175,17 +175,17 @@ function renderMessages(messages, doClear) {
     const messageEl = document.createElement('div');
     messageEl.classList.add('message', `message-${msg.role}`);
     
-    const avatar = document.createElement('div');
-    avatar.classList.add('avatar', `avatar-${msg.role}`);
-    avatar.innerHTML = msg.role === 'user' ? 
-      '<i class="fas fa-user"></i>' : 
-      '<i class="fas fa-robot"></i>';
-    
+    if (msg.role == 'assistant') {
+      const avatar = document.createElement('div');
+      avatar.classList.add('avatar', `avatar-${msg.role}`);
+      avatar.innerHTML = '<i class="fas fa-robot"></i>';
+      
+      
+      messageEl.appendChild(avatar);
+    }
     const content = document.createElement('div');
     content.classList.add('message-content');
     content.innerHTML = format( msg.content );
-    
-    messageEl.appendChild(avatar);
     messageEl.appendChild(content);
     messagesContainer.appendChild(messageEl);
   });

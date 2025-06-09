@@ -93,6 +93,7 @@ body {
 .logo {
   font-family: "Russo One", sans-serif;
   color: #fff;
+  text-decoration: none;
 }
 
 .settings {
@@ -184,7 +185,7 @@ body {
 .message {
   display: flex;
   gap: 1rem;
-  padding: 1.5rem 1rem;
+  padding: 0.5rem 1rem;
   max-width: 800px;
   margin: 0 auto;
   width: 100%;
@@ -214,6 +215,15 @@ body {
 
 .avatar-user {
   background-color: #5436da;
+}
+
+.message.message-user {
+  width: 80%;
+}
+.message-user .message-content {
+  background-color: var(--sidebar-bg);
+  border-radius: 1rem;
+  padding: 1rem;
 }
 
 .message-content {
