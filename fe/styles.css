@@ -64,13 +64,13 @@ body {
   background-color: #2a2b32;
 }
 
-.history {
+.topic {
   flex: 1;
   overflow-y: auto;
   margin: 0.5rem 0;
 }
 
-.history-item {
+.topic-item {
   padding: 0.75rem;
   border-radius: 6px;
   cursor: pointer;
@@ -80,11 +80,11 @@ body {
   text-overflow: ellipsis;
 }
 
-.history-item:hover {
+.topic-item:hover {
   background-color: #2a2b32;
 }
 
-.history-item.active {
+.topic-item.active {
   background-color: #444654;
 }
 
