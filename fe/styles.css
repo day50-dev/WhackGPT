@@ -79,6 +79,9 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.topic-item strong {
+  font-weight: normal;
+}
 
 .topic-item:hover {
   background-color: #2a2b32;
@@ -86,6 +89,10 @@ body {
 
 .topic-item.active {
   background-color: #444654;
+}
+.logo {
+  font-family: "Russo One", sans-serif;
+  color: #fff;
 }
 
 .settings {

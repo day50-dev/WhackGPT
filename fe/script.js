@@ -94,7 +94,6 @@ ws.onmessage = (event) => {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 };
 
-
 function createNewChat() {
   uid = '';
   window.location.hash = '';
@@ -164,7 +163,11 @@ function clearMessages() {
   return;
 }
 
-function renderMessages(messages) {
+function renderMessages(messages, doClear) {
+  if (doClear) {
+    messagesContainer.innerHTML = '';
+  }
+
   messages.forEach(msg => {
     if (msg.role == 'system') {
       return;
@@ -260,6 +263,7 @@ async function sendMessage() {
     localStorage.setItem('uid', data.uid);
     set_context(data.uid);
   }
+  renderMessages(data.data, true);
 }
 
 function format(text) {
