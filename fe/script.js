@@ -1,8 +1,6 @@
-// pay attention to the order here. We try the QS
-// first then go to localStorage, then do the fallback
-// initialization
 const ws = new WebSocket("ws://localhost:8000/ws");
-var uid = window.location.hash.slice(1) || localStorage.getItem('uid');
+var uid = window.location.hash.slice(1) || localStorage.getItem('uid'),
+    ws_map = {};
 const newChatBtn = document.getElementById('newChatBtn');
 const historyList = document.getElementById('historyList');
 const chatTitle = document.getElementById('chatTitle');
@@ -69,7 +67,6 @@ async function init() {
   // if we have a uid established, we use it to get the chat history
   if(uid) {
     set_context(uid);
-    sendMessage();
   } 
 }
 
@@ -330,42 +327,22 @@ async function sendMessage() {
     isTyping: true,
     timestamp: new Date().toISOString()
   };
-  
-  try {
-    const response = await fetch("chat", {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ uid: uid, text, context })
-    });
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
-    }
-    
-    const data = await response.json();
-      
-    if(!uid && data.uid) {
-      localStorage.setItem('uid', data.uid);
-      set_context(data.uid);
-    }
-/*
-    let meta, prompt, off = 1;
-    if(res.data[0].role === 'session') {
-      [meta, prompt] = res.data;
-      off = 2;
-      _dom.model.value = meta.content.model;
-      _dom.ctxt.innerHTML = prompt.content;
-    }
-
-    _dom.conv.innerHTML = res.data.slice(off).map(row => `<div class=${row.role}><span>${format(row.content)}</span></div>`).join('');
-    _dom.conv.scrollTo(0,_dom.conv.scrollHeight);
-*/
-    // Replace typing indicator with actual response
-  } catch (error) {
-    console.error('Error:', error);
+  let body = JSON.stringify({ uid: uid, text });
+  if(!uid) {
+    body.prompt = systemprompt;
   }
+  const response = await fetch("chat", {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: body
+  });
+  const data = await response.json();
+    
+  if(!uid && data.uid) {
+    localStorage.setItem('uid', data.uid);
+    set_context(data.uid);
+  }
+  // Replace typing indicator with actual response 
 }
 
 function format(text) {

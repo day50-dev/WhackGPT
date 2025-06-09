@@ -117,10 +117,13 @@ async def sync():
         print(f"Error syncing data: {e}")
         return JSONResponse({"result": False, "error": str(e)})
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    redis_pubsub.subscribe(CHAT_CHANNEL)
+async def stream_channel(what):
+    """
+    async for message in pubsub.listen():
+        if message['type'] == 'message':
+            data = message['data'].decode('utf-8')
+            await websocket.send_text(data)
+    """
     try:
         while True:
             message = redis_pubsub.get_message()
@@ -133,6 +136,18 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         redis_pubsub.unsubscribe(CHAT_CHANNEL)
 
+@app.websocket("/ws/channel/{id}")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    redis_pubsub.subscribe(f"sess:{id}")
+    await stream_channel(f"sess:{id}")
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    redis_pubsub.subscribe(CHAT_CHANNEL)
+    await stream_channel(CHAT_CHANNEL)
+   
 app.mount("/", StaticFiles(directory="fe", html=True), name="static")
 
 if __name__ == "__main__":
