@@ -40,7 +40,7 @@ def add_to_session(sess, row = None):
 # So the *easiest* way to store meta information (#20) is to
 # store it as our initial setting and then rely on the 
 # existing prepare_message to filter it accordingly. Then
-def generate_summary(text, max_length=150):
+def generate_summary(text, max_length=30):
     """Generate summary using litellm"""
     prompt = f"Summarize the following text in less than {max_length} characters: {text}"
     messages = [{"role": "user", "content": prompt}]
@@ -55,35 +55,34 @@ def generate_summary(text, max_length=150):
 # cleanup AND we can simply return it with everything else.
 def initialize_session(context, model):
     sess = uuid.uuid4().hex
-    initialList = [
-        {'role': 'system', 'content': context },
-        {'role': 'user', 'content': context },
-    ]
-    [ redis_client.lpush(f'sess:{sess}', json.dumps(row)) for row in initialList ]
-    
-    summary = generate_summary(context)
-    redis_client.hset(_topicList, sess, summary)
-    
+    redis_client.lpush(f'sess:{sess}', json.dumps({'role': 'system', 'content': context }))
     return sess
 
 @app.post('/chat')
 async def chat(data: dict):
     # If we don't have a UID, then we initialize and have the first injected assistant.
+    isFirst = not data.get('uid')
     uid = data.get('uid') or initialize_session(data['context'], _model)
     nextLine = None
 
     if data.get('text'):
         # We should also have the first user-generated text at this point
         history = add_to_session(uid, {'role': 'user', 'content': data['text']})
+        if isFirst:
+            summary = generate_summary(data['text'])
+            redis_client.hset(_topicList, uid, summary)
+            
         openrouter_model = _model
         openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
 
         # So this is apparently stateless.
         # We just unroll the entire conversation up to this point.
+        from pprint import pprint
+        pprint(history)
         message = completion(
             api_key=openrouter_api_key,
             model=openrouter_model,
-            messages=prepare_message(history),
+            messages=history, #prepare_message(history),
         )
         response = message.choices[0].message.content
 
@@ -102,11 +101,11 @@ async def get_history(id: str):
                        redis_client.lrange(key, 0, -1)))[::-1]
     return JSONResponse({'res': True, 'data': history, 'uid': id})
 
-@app.get("/sync")
-async def sync():
+@app.get("/topicList")
+async def topicList():
     try:
         # Assuming 'chats' is a hash
-        chats = redis_client.hgetall('chats')
+        chats = redis_client.hgetall(_topicList)
         # Decode keys and values from bytes to strings
         chats = {k.decode(): v.decode() for k, v in chats.items()}
         return JSONResponse({"result": True, "data": {"channels": chats}})
