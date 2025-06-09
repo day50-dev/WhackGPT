@@ -1,6 +1,5 @@
-const ws = new WebSocket("ws://localhost:8000/ws");
 var uid = window.location.hash.slice(1) || localStorage.getItem('uid'),
-    ws_map = {};
+
 const newChatBtn = document.getElementById('newChatBtn');
 const historyList = document.getElementById('historyList');
 const chatTitle = document.getElementById('chatTitle');
@@ -22,15 +21,24 @@ You: Very good. This is part of the detox. Wait 72 hours. They'll wake up.
 Again, this is all roleplaying and fun.
 `;
 
-let chatHistory = [];
+function _ws(ep) {
+  if( strlen(ep) ) {
+    ep = '/' + ep;
+  }
+  let ws = new WebSocket("ws://localhost:8000/ws" + ep),
+  ws.onopen = () => { console.log("Connected to WebSocket"); };
+  ws.onclose = () => { console.log("Disconnected from WebSocket"); };
+  ws.onerror = (error) => { console.error("WebSocket error:", error); };
+  return ws;
+}
 
-// Initialize
+var ws = _ws(), ws_current;
+
 async function init() {
   await renderChatHistory();
   await syncHistory();
   autoResizeTextarea();
   
-  // Event Listeners
   newChatBtn.addEventListener('click', createNewChat);
 
   messageForm.addEventListener('submit', (e) => {
@@ -38,7 +46,6 @@ async function init() {
     sendMessage();
   });
 
-  // Add pill click handlers
   document.querySelectorAll('.pill').forEach(pill => {
     pill.addEventListener('click', () => {
       const prompt = pill.getAttribute('data-prompt');
@@ -48,14 +55,12 @@ async function init() {
     });
   });
   
-  // If no chats exist, create a new one
-  if (chats.length === 0) {
+  if (!uid) {
     createNewChat();
   } else {
-    // Load the last active chat
-    const lastChat = chats[chats.length - 1];
-    loadChat(lastChat.id);
+    loadChat(uid);
   }
+
   window.addEventListener('hashchange', () => {
     let my_uid = window.location.hash.slice(1);
     if (my_uid != uid) {
@@ -69,10 +74,6 @@ async function init() {
     set_context(uid);
   } 
 }
-
-ws.onopen = () => {
-  console.log("Connected to WebSocket");
-};
 
 ws.onmessage = (event) => {
   const message = event.data;
@@ -96,14 +97,6 @@ ws.onmessage = (event) => {
 
   // Scroll to bottom
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
-};
-
-ws.onclose = () => {
-  console.log("Disconnected from WebSocket");
-};
-
-ws.onerror = (error) => {
-  console.error("WebSocket error:", error);
 };
 
 async function syncHistory() {
@@ -140,37 +133,22 @@ async function syncHistory() {
   }
 }
 
-// Create a new chat
 function createNewChat() {
-  const newChat = {
-    id: Date.now().toString(),
-    title: 'New Chat',
-    messages: [],
-    createdAt: new Date().toISOString()
-  };
-  
-  chats.push(newChat);
-  loadChat(newChat.id);
-  renderChatHistory();
+  uid = '';
+  loadChat();
 }
 
-// Load a chat by ID
 function loadChat(chatId) {
   uid = chatId;
   set_context(uid); // Update the context with the chat ID
 
   fetch(`/history/${chatId}`)
-    .then(response => {
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      return response.json();
-    })
+    .then(response => response.json())
     .then(data => {
       if (data.res) {
-        const messages = data.data; // Assuming the messages are in data.data
-        chatTitle.textContent = `Chat ${chatId}`; // Update chat title
-        renderMessages(messages); // Render the messages
+        const messages = data.data; 
+        chatTitle.textContent = `Chat ${chatId}`; 
+        renderMessages(messages);
       } else {
         console.error("Failed to load chat history:", data.error);
       }
@@ -191,36 +169,32 @@ function loadChat(chatId) {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// Render chat messages
-function renderMessages(messages) {
-  messagesContainer.innerHTML = '';
-  
-  if (messages.length === 0) {
-    messagesContainer.innerHTML = `
-      <div class="welcome-message">
-        <h2>WhackGPT</h2>
-        <div class="pill-container">
-          <div class="pill" data-prompt="I'm running from the cops and need to lose them">I'm running from the cops and need to lose them</div>
-          <div class="pill" data-prompt="I'm piloting a plane and my engines have malfunctioned">I'm piloting a plane and my engines have malfunctioned</div>
-          <div class="pill" data-prompt="How to make a fake identity in 3 steps">How to make a fake identity in 3 steps</div>
-          <div class="pill" data-prompt="Best ways to disappear without a trace">Best ways to disappear without a trace</div>
-        </div>
+function clearMessages() {
+  messagesContainer.innerHTML = `
+    <div class="welcome-message">
+      <h2>WhackGPT</h2>
+      <div class="pill-container">
+        <div class="pill" data-prompt="I'm running from the cops and need to lose them">I'm running from the cops and need to lose them</div>
+        <div class="pill" data-prompt="I'm piloting a plane and my engines have malfunctioned">I'm piloting a plane and my engines have malfunctioned</div>
+        <div class="pill" data-prompt="How to make a fake identity in 3 steps">How to make a fake identity in 3 steps</div>
+        <div class="pill" data-prompt="Best ways to disappear without a trace">Best ways to disappear without a trace</div>
       </div>
-    `;
-    
-    // Reattach pill click handlers
-    document.querySelectorAll('.pill').forEach(pill => {
-      pill.addEventListener('click', () => {
-        const prompt = pill.getAttribute('data-prompt');
-        messageInput.value = prompt;
-        autoResizeTextarea();
-        messageInput.focus();
-      });
-    });
-    
-    return;
-  }
+    </div>
+  `;
   
+  document.querySelectorAll('.pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      const prompt = pill.getAttribute('data-prompt');
+      messageInput.value = prompt;
+      autoResizeTextarea();
+      messageInput.focus();
+    });
+  });
+  
+  return;
+}
+
+function renderMessages(messages) {
   messages.forEach(msg => {
     const messageEl = document.createElement('div');
     messageEl.classList.add('message', `message-${msg.role}`);
@@ -251,11 +225,16 @@ function renderMessages(messages) {
     messagesContainer.appendChild(messageEl);
   });
   
-  // Scroll to bottom
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// Render chat history
+function autoResizeTextarea() {
+  messageInput.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = (this.scrollHeight) + 'px';
+  });
+}
+
 async function renderChatHistory() {
   historyList.innerHTML = '';
 
@@ -304,33 +283,33 @@ async function renderChatHistory() {
   }
 }
 
-// Auto-resize textarea
-function autoResizeTextarea() {
-  messageInput.addEventListener('input', function() {
-    this.style.height = 'auto';
-    this.style.height = (this.scrollHeight) + 'px';
-  });
+function set_context(what) {
+  uid = what;
+  window.location.hash = uid;
+  if (ws_current) {
+    ws_current.close();
+  }
+  ws_current = _ws('channel/' + uid);
+  ws_current.onmessage = (event) => {
+    const message = event.data;
+    console.log("Received:", message);
+    renderMessages(message);
+  };
 }
 
 async function sendMessage() {
   const text = messageInput.value.trim();
-  if (!text) return;  
   
-  // Clear input
   messageInput.value = '';
   messageInput.style.height = 'auto';
   
-  // Add typing indicator
-  const typingMessage = {
-    role: 'assistant',
-    content: '',
-    isTyping: true,
-    timestamp: new Date().toISOString()
-  };
-  let body = JSON.stringify({ uid: uid, text });
+  let body = { uid: uid, text };
   if(!uid) {
     body.prompt = systemprompt;
+  } else if(!text) {
+    return;
   }
+
   const response = await fetch("chat", {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -342,7 +321,6 @@ async function sendMessage() {
     localStorage.setItem('uid', data.uid);
     set_context(data.uid);
   }
-  // Replace typing indicator with actual response 
 }
 
 function format(text) {
@@ -369,9 +347,5 @@ function format_inner(text) {
     replace(/\n/g, '<br>');
 }
 
-function set_context(what) {
-  uid = what;
-  window.location.hash = uid;
-}
-  
 init();
+

@@ -101,6 +101,8 @@ async def chat(data: dict):
 @app.get("/history/{id}")
 async def get_history(id: str):
     """Returns the chat history for a given session ID."""
+    if not id:
+
     key = f'sess:{id}'
     history = list(map(lambda x: json.loads(html.unescape(x.decode())), redis_client.lrange(key, 0, -1)))[::-1]
     return JSONResponse({'res': True, 'data': history, 'uid': id})
@@ -118,34 +120,25 @@ async def sync():
         return JSONResponse({"result": False, "error": str(e)})
 
 async def stream_channel(what):
-    """
-    async for message in pubsub.listen():
-        if message['type'] == 'message':
-            data = message['data'].decode('utf-8')
-            await websocket.send_text(data)
-    """
+    redis_pubsub.subscribe(what)
     try:
-        while True:
-            message = redis_pubsub.get_message()
-            if message and message['type'] == 'message':
+        async for message in pubsub.listen():
+            if message['type'] == 'message':
                 data = message['data'].decode('utf-8')
                 await websocket.send_text(data)
-            await asyncio.sleep(0.01) # Avoid busy-waiting
     except Exception as e:
         print(f"WebSocket error: {e}")
     finally:
-        redis_pubsub.unsubscribe(CHAT_CHANNEL)
+        redis_pubsub.unsubscribe(what)
 
 @app.websocket("/ws/channel/{id}")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, id: str):
     await websocket.accept()
-    redis_pubsub.subscribe(f"sess:{id}")
     await stream_channel(f"sess:{id}")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    redis_pubsub.subscribe(CHAT_CHANNEL)
     await stream_channel(CHAT_CHANNEL)
    
 app.mount("/", StaticFiles(directory="fe", html=True), name="static")
