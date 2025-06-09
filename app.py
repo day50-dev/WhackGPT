@@ -1,6 +1,6 @@
 import uuid, os, redis, json, html
 import asyncio
-import aioredis
+from redis.asyncio import Redis as ioredis
 from litellm import completion
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse
@@ -10,7 +10,6 @@ app = FastAPI()
 ws_redis = ioredis.from_url("redis://localhost")
 redis_client  = redis.Redis(host='localhost', port=6379, db=0)
 
-pubsub = redis_client.pubsub()
 _topicList = "convos"
 _model = 'openrouter/google/gemini-2.0-flash-exp:free'
 
@@ -115,30 +114,30 @@ async def sync():
         print(f"Error syncing data: {e}")
         return JSONResponse({"result": False, "error": str(e)})
 
-async def stream_channel(what):
-    pubsub.subscribe(what)
+async def stream_channel(websocket: WebSocket, what: str):
+    pubsub = ws_redis.pubsub()
+    await pubsub.subscribe(what)
     try:
-        while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+        async for message in pubsub.listen():
             if message['type'] == 'message':
                 data = message['data'].decode('utf-8')
                 await websocket.send_text(data)
-            await asyncio.sleep(0.01)
 
     except Exception as e:
         print(f"WebSocket error: {e}")
     finally:
-        pubsub.unsubscribe(what)
+        await pubsub.unsubscribe(what)
+        await pubsub.close()
 
 @app.websocket("/ws/channel/{id}")
 async def websocket_endpoint(websocket: WebSocket, id: str):
     await websocket.accept()
-    await stream_channel(f"sess:{id}")
+    await stream_channel(websocket, f"sess:{id}")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    await stream_channel(_topicList)
+    await stream_channel(websocket, _topicList)
    
 app.mount("/", StaticFiles(directory="fe", html=True), name="static")
 

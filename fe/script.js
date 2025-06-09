@@ -160,6 +160,13 @@ function loadChat(chatId) {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+function autoResizeTextarea() {
+  messageInput.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = (this.scrollHeight) + 'px';
+  });
+}
+
 function clearMessages() {
   messagesContainer.innerHTML = `
     <div class="welcome-message">
@@ -201,7 +208,7 @@ function renderMessages(messages) {
     
     const content = document.createElement('div');
     content.classList.add('message-content');
-    content.textContent = msg.content;
+    content.innerHTML = format( msg.content );
     
     messageEl.appendChild(avatar);
     messageEl.appendChild(content);
@@ -209,13 +216,6 @@ function renderMessages(messages) {
   });
   
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function autoResizeTextarea() {
-  messageInput.addEventListener('input', function() {
-    this.style.height = 'auto';
-    this.style.height = (this.scrollHeight) + 'px';
-  });
 }
 
 async function renderTopics() {
@@ -299,19 +299,17 @@ function format(text) {
 }
 
 function format_inner(text) {
-  if(!verbose && text.match(/<response>/)) {
-    // Multiline matching in Chrome is STILL BROKEN in 2024.
-    // I first ran into this bug in 2009. I had completely forgotten
-    // how broken it was.
-    //
-    // Also these *should not* be escaped, that's yet 
-    // another browser bug.
-    let re = text.replace(/\n/g, '<br>').match(/<response>(.*)<\//);
+  // Multiline matching in Chrome is STILL BROKEN in 2024.
+  // I first ran into this bug in 2009. I had completely forgotten
+  // how broken it was.
+  //
+  // Also these *should not* be escaped, that's yet 
+  // another browser bug.
+  let re = text.replace(/\n/g, '<br>').match(/<response>(.*)<\//);
 
-    if(re) {
-      return re[1].replace(/^(<br>)+/, '');
-    } 
-  }
+  if(re) {
+    return re[1].replace(/^(<br>)+/, '');
+  } 
   return text.
     replace(/</g, '&lt;').
     replace(/>/g, '&gt;').
