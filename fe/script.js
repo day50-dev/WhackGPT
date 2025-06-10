@@ -68,6 +68,11 @@ async function init() {
   if(uid) {
     set_context(uid);
   } 
+  messageInput.addEventListener('keyup', function(e) {
+    if (e.code == 'Enter' && !e.shiftKey) {
+      sendMessage();
+    }
+  }, false);
 }
 
 ws.onmessage = (event) => {
@@ -132,10 +137,10 @@ function loadChat(chatId) {
 }
 
 function autoResizeTextarea() {
-  messageInput.addEventListener('input', function() {
+  messageInput.addEventListener('input', function(e) {
     this.style.height = 'auto';
     this.style.height = (this.scrollHeight) + 'px';
-  });
+  }, false);
 }
 
 function clearMessages() {

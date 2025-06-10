@@ -11,6 +11,7 @@
   --input-bg: #40414f;
   --pill-bg: #40414f;
   --pill-hover: #4a4b59;
+  --slightly-lighter: #444654;
 }
 
 * {
@@ -88,7 +89,7 @@ body {
 }
 
 .topic-item.active {
-  background-color: #444654;
+  background-color: var(--slightly-lighter);
 }
 .logo {
   font-family: "Russo One", sans-serif;
@@ -187,8 +188,6 @@ body {
   gap: 1rem;
   padding: 0.5rem 1rem;
   max-width: 800px;
-  margin: 0 auto;
-  width: 100%;
 }
 
 .message-ai {
@@ -197,6 +196,7 @@ body {
 
 .message-user {
   background-color: var(--message-user-bg);
+  margin-left: auto;
 }
 
 .avatar {
@@ -213,15 +213,11 @@ body {
   background-color: var(--primary);
 }
 
-.avatar-user {
-  background-color: #5436da;
-}
-
 .message.message-user {
-  width: 80%;
+  width: auto;
 }
 .message-user .message-content {
-  background-color: var(--sidebar-bg);
+  background-color: var(--slightly-lighter);
   border-radius: 1rem;
   padding: 1rem;
 }
@@ -229,11 +225,10 @@ body {
 .message-content {
   flex: 1;
   line-height: 1.5;
-  white-space: pre-wrap;
 }
 
 .message-content p {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0;
 }
 
 .input-area {
