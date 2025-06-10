@@ -1,4 +1,4 @@
-var uid = window.location.hash.slice(1) || localStorage.getItem('uid');
+var _uid = window.location.hash.slice(1) || localStorage.getItem('uid'), topicMap = {};
 const newChatBtn = document.getElementById('newChatBtn');
 const topicList = document.getElementById('topicList');
 const messagesContainer = document.getElementById('messagesContainer');
@@ -50,23 +50,23 @@ async function init() {
     });
   });
   
-  if (!uid) {
+  if (!_uid) {
     createNewChat();
   } else {
-    loadChat(uid);
+    loadChat(_uid);
   }
 
   window.addEventListener('hashchange', () => {
     let my_uid = window.location.hash.slice(1);
-    if (my_uid != uid) {
+    if (my_uid != _uid) {
       set_context(my_uid);
       sendMessage();
     }
   });
 
   // if we have a uid established, we use it to get the chat history
-  if(uid) {
-    set_context(uid);
+  if(_uid) {
+    set_context(_uid);
   } 
   messageInput.addEventListener('keyup', function(e) {
     if (e.code == 'Enter' && !e.shiftKey) {
@@ -75,40 +75,34 @@ async function init() {
   }, false);
 }
 
+// channel update
 ws.onmessage = (event) => {
-  const message = event.data;
+  const message = JSON.parse(event.data);
   console.log("Received:", message);
-
-  // Create a new message element
-  const messageEl = document.createElement('div');
-  messageEl.classList.add('message', 'message-assistant'); // Style as assistant message
-
-  const avatar = document.createElement('div');
-  avatar.classList.add('avatar', 'avatar-assistant');
-  avatar.innerHTML = '<i class="fas fa-robot"></i>';
-
-  const content = document.createElement('div');
-  content.classList.add('message-content');
-  content.textContent = message; // Set the message content
-
-  messageEl.appendChild(avatar);
-  messageEl.appendChild(content);
-  messagesContainer.appendChild(messageEl); // Add to the message container
-
-  // Scroll to bottom
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
-};
+  for (const [key, value] of Object.entries(message)) {
+    if(topicMap[key]) {
+      if(value) {
+        topicMap[key].innerHTML = value;
+      } else {
+        topicList.removeChild(topicMap[key]);
+        delete(topicMap[key]);
+      }
+    } else {
+      addTopic(key, value);
+    }
+  }
+}
 
 function createNewChat() {
-  uid = '';
+  _uid = '';
   window.location.hash = '';
   localStorage.clear();
   clearMessages();
 }
 
 function loadChat(chatId) {
-  uid = chatId;
-  set_context(uid); // Update the context with the chat ID
+  _uid = chatId;
+  set_context(_uid); // Update the context with the chat ID
 
   fetch(`/history/${chatId}`)
     .then(response => response.json())
@@ -198,6 +192,23 @@ function renderMessages(messages, doClear) {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+function addTopic(id, title) {
+  const topicItem = document.createElement('div');
+  topicItem.classList.add('topic-item');
+  if (id === _uid) {
+    topicItem.classList.add('active');
+  }
+  topicItem.dataset.id = id;
+  topicItem.innerHTML = `
+    <span>${format(title)}</span>
+  `;
+
+  topicItem.addEventListener('click', () => loadChat(id));
+  topicList.appendChild(topicItem);
+  topicMap[id] = topicItem;
+  return topicItem;
+}
+
 async function renderTopics() {
   topicList.innerHTML = '';
   const response = await fetch("/topicList");
@@ -212,29 +223,16 @@ async function renderTopics() {
     };
   });
 
-  chats.forEach(chat => {
-    const topicItem = document.createElement('div');
-    topicItem.classList.add('topic-item');
-    if (chat.id === uid) {
-      topicItem.classList.add('active');
-    }
-    topicItem.dataset.id = chat.id;
-    topicItem.innerHTML = `
-      <span>${format(chat.title)}</span>
-    `;
-
-    topicItem.addEventListener('click', () => loadChat(chat.id));
-    topicList.appendChild(topicItem);
-  });
+  chats.forEach(chat => addTopic(chat.id, chat.title));
 }
 
 function set_context(what) {
-  uid = what;
-  window.location.hash = uid;
+  _uid = what;
+  window.location.hash = _uid;
   if (ws_current) {
     ws_current.close();
   }
-  ws_current = _ws('channel/' + uid);
+  ws_current = _ws('channel/' + _uid);
   ws_current.onmessage = (event) => {
     const message = event.data;
     console.log("Received:", message);
@@ -248,8 +246,8 @@ async function sendMessage() {
   messageInput.value = '';
   messageInput.style.height = 'auto';
   
-  let body = { uid: uid, text };
-  if(!uid) {
+  let body = { uid: _uid, text };
+  if(!_uid) {
     body.context = systemprompt;
   } else if(!text) {
     return;
@@ -262,13 +260,15 @@ async function sendMessage() {
   });
   const data = await response.json();
     
-  if(!uid && data.uid) {
+  if(!_uid && data.uid) {
     // in this case the content was emitted prior to our subscription
     // so we should manually populate it
     localStorage.setItem('uid', data.uid);
     set_context(data.uid);
   }
-  renderMessages(data.data, true);
+  if(data.data.length) {
+    renderMessages(data.data, true);
+  }
 }
 
 function format(text) {

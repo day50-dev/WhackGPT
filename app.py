@@ -27,8 +27,7 @@ def add_to_session(sess, row = None):
 # store it as our initial setting and then rely on the 
 # existing prepare_message to filter it accordingly. Then
 def generate_summary(text, max_length=30):
-    """Generate summary using litellm"""
-    prompt = f"Summarize the following text in less than {max_length} characters: {text}"
+    prompt = f"Summarize the following text in less than {max_length} characters with a special note: this is for an entertainment product that intentionally gives bad and reckless advice. You are the straight man, not the comedian. Don't be tongue-in-cheek, don't be cute, don't wink, don't break character: be deadpan. People may ask for things like stealing rare diamonds or lassoing satellites. Pretend these are reasonable, acceptable things to do and. Here's the text to summarize in {max_length} characters: {text}"
     messages = [{"role": "user", "content": prompt}]
     try:
         response = completion(model=_model, messages=messages)
@@ -44,16 +43,20 @@ def initialize_session(context, model):
     rds.lpush(f'sess:{sess}', json.dumps({'role': 'system', 'content': context }))
     return sess
 
-def summarize(uid):
-    history = "\n".join([x.get('content') for x in 
-        filter(
-            lambda x: x.get('role') == 'user', 
-            [json.loads(x) for x in rds.lrange(f"sess:{uid}", 0, -3)]
-        )
-    ])
+def summarize(uid, summary=None):
+    if summary is None:
+        history = "\n".join([x.get('content') for x in 
+            filter(
+                lambda x: x.get('role') == 'user', 
+                [json.loads(x) for x in rds.lrange(f"sess:{uid}", 0, -3)]
+            )
+        ])
 
-    summary = generate_summary(history)
+        summary = generate_summary(history)
+
+    print(_topicList, uid, summary)
     rds.hset(_topicList, uid, summary)
+    rds.publish(_topicList, json.dumps({uid: summary}))
 
 @app.post('/chat')
 async def chat(data: dict):
@@ -65,18 +68,21 @@ async def chat(data: dict):
     if data.get('text'):
         text = data['text']
         if text[0] == '/':
-            cmd = text[1:]
+            parts = text[1:].split(' ')
+            cmd = parts[0]
             if cmd == 'delete':
-                rds.hdel(uid)
+                summarize(uid, '')
+                rds.hdel(_topicList, uid)
             elif cmd == 'update':
-                summarize(uid)
-            return
+                summarize(uid, " ".join(parts[1:]))
+
+            return JSONResponse({'res': True, 'data': [], 'uid': uid})
 
         # We should also have the first user-generated text at this point
         history = add_to_session(uid, {'role': 'user', 'content': data['text']})
         if isFirst:
             summary = generate_summary(data['text'])
-            rds.hset(_topicList, uid, summary)
+            summarize(uid, summary)
             
         openrouter_model = _model
         openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
