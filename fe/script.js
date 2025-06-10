@@ -238,7 +238,7 @@ function set_context(what) {
   ws_current.onmessage = (event) => {
     const message = event.data;
     console.log("Received:", message);
-    renderMessages(message);
+    renderMessages([JSON.parse(message)]);
   }
 }
 

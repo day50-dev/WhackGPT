@@ -8,34 +8,20 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 ws_redis = ioredis.from_url("redis://localhost")
-redis_client  = redis.Redis(host='localhost', port=6379, db=0)
+rds  = redis.Redis(host='localhost', port=6379, db=0)
 
 _topicList = "convos"
 _model = 'openrouter/google/gemini-2.0-flash-exp:free'
-
-def prepare_message(message_list):
-    # So you need alternating
-    # user / assistant message
-    mt = ['user', 'assistant']
-    ix = 0
-    fList = []
-
-    for row in message_list:
-      if row['role'] == mt[ix]:
-        fList.append(row)
-        ix = not ix
-    return fList
-
 
 # row should be typed liked 
 # {role: assistant/user, content: text}
 def add_to_session(sess, row = None):
     key = f'sess:{sess}'
     if row:
-        redis_client.lpush(key, json.dumps(row))
-        redis_client.publish(key, json.dumps(row))
+        rds.lpush(key, json.dumps(row))
+        rds.publish(key, json.dumps(row))
 
-    return list(map(lambda x: json.loads(html.unescape(x.decode())), redis_client.lrange(key, 0, -1)))[::-1]
+    return list(map(lambda x: json.loads(html.unescape(x.decode())), rds.lrange(key, 0, -1)))[::-1]
 
 # So the *easiest* way to store meta information (#20) is to
 # store it as our initial setting and then rely on the 
@@ -55,8 +41,19 @@ def generate_summary(text, max_length=30):
 # cleanup AND we can simply return it with everything else.
 def initialize_session(context, model):
     sess = uuid.uuid4().hex
-    redis_client.lpush(f'sess:{sess}', json.dumps({'role': 'system', 'content': context }))
+    rds.lpush(f'sess:{sess}', json.dumps({'role': 'system', 'content': context }))
     return sess
+
+def summarize(uid):
+    history = "\n".join([x.get('content') for x in 
+        filter(
+            lambda x: x.get('role') == 'user', 
+            [json.loads(x) for x in rds.lrange(f"sess:{uid}", 0, -3)]
+        )
+    ])
+
+    summary = generate_summary(history)
+    rds.hset(_topicList, uid, summary)
 
 @app.post('/chat')
 async def chat(data: dict):
@@ -66,11 +63,20 @@ async def chat(data: dict):
     nextLine = None
 
     if data.get('text'):
+        text = data['text']
+        if text[0] == '/':
+            cmd = text[1:]
+            if cmd == 'delete':
+                rds.hdel(uid)
+            elif cmd == 'update':
+                summarize(uid)
+            return
+
         # We should also have the first user-generated text at this point
         history = add_to_session(uid, {'role': 'user', 'content': data['text']})
         if isFirst:
             summary = generate_summary(data['text'])
-            redis_client.hset(_topicList, uid, summary)
+            rds.hset(_topicList, uid, summary)
             
         openrouter_model = _model
         openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -82,7 +88,7 @@ async def chat(data: dict):
         message = completion(
             api_key=openrouter_api_key,
             model=openrouter_model,
-            messages=history, #prepare_message(history),
+            messages=history,
         )
         response = message.choices[0].message.content
 
@@ -97,15 +103,14 @@ async def chat(data: dict):
 async def get_history(id: str):
     """Returns the chat history for a given session ID."""
     key = f'sess:{id}'
-    history = list(map(lambda x: json.loads(html.unescape(x.decode())), 
-                       redis_client.lrange(key, 0, -1)))[::-1]
+    history = list(map(lambda x: json.loads(html.unescape(x.decode())), rds.lrange(key, 0, -1)))[::-1]
     return JSONResponse({'res': True, 'data': history, 'uid': id})
 
 @app.get("/topicList")
 async def topicList():
     try:
         # Assuming 'chats' is a hash
-        chats = redis_client.hgetall(_topicList)
+        chats = rds.hgetall(_topicList)
         # Decode keys and values from bytes to strings
         chats = {k.decode(): v.decode() for k, v in chats.items()}
         return JSONResponse({"result": True, "data": {"channels": chats}})
