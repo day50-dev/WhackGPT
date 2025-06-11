@@ -398,20 +398,45 @@ textarea {
   40% { transform: scale(1.0); }
 }
 
+.hamburger-menu {
+  display: none;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
+  
+  .app-container {
+    overflow-x: hidden; /* Prevent horizontal scrollbar */
+  }
+
+  .hamburger-menu {
+    display: block;
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    font-size: 1.5rem;
+    color: var(--text-primary);
+    cursor: pointer;
+    z-index: 101;
+  }
+
   .sidebar {
     position: absolute;
     left: -260px;
     z-index: 100;
     height: 100%;
     transition: transform 0.3s ease;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); /* Add a shadow */
   }
-  
+
   .sidebar.active {
     transform: translateX(260px);
   }
-  
+
+  .chat-container {
+    width: 100%; /* Make chat container take full width */
+  }
+
   .chat-header {
     justify-content: center;
   }

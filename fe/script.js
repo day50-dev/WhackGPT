@@ -292,6 +292,19 @@ function format_inner(text) {
     replace(/>/g, '&gt;').
     replace(/\n/g, '<br>');
 }
+const hamburgerMenu = document.querySelector('.hamburger-menu');
+const sidebar = document.querySelector('.sidebar');
+
+hamburgerMenu.addEventListener('click', () => {
+  sidebar.classList.toggle('active');
+  hamburgerMenu.style.display = "none";
+});
+
+// Close sidebar when clicking outside of it (e.g., on the chat area)
+document.querySelector('.chat-container').addEventListener('click', () => {
+  sidebar.classList.remove('active');
+  hamburgerMenu.style.display = "block";
+});
 
 init();
 
