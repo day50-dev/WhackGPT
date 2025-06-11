@@ -143,7 +143,7 @@ async def websocket_endpoint(websocket: WebSocket, id: str):
     await websocket.accept()
     await stream_channel(websocket, f"sess:{id}")
 
-@app.websocket("/ws")
+@app.websocket("/ws/topics")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     await stream_channel(websocket, _topicList)

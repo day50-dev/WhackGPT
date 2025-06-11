@@ -21,14 +21,15 @@ function _ws(ep) {
   } else {
     ep = '';
   }
-  let ws = new WebSocket(`ws://${window.Location.hostname}:8000/ws` + ep);
+  let ws = new WebSocket(`wss://${window.location.hostname}/ws` + ep);
   ws.onopen = () => { console.log("Connected: " + ep); };
   ws.onclose = () => { console.log("Disconnected: " + ep); };
   ws.onerror = (error) => { console.error("Error: " + ep, error); };
   return ws;
 }
 
-var ws = _ws(), ws_current;
+var ws = _ws('topics'),
+    ws_current;
 
 async function init() {
   await renderTopics();
