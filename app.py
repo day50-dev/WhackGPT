@@ -89,9 +89,8 @@ async def chat(data: dict):
 
         # So this is apparently stateless.
         # We just unroll the entire conversation up to this point.
-        from pprint import pprint
-        pprint(history)
-        message = completion(
+        message = await asyncio.to_thread(
+            completion,
             api_key=openrouter_api_key,
             model=openrouter_model,
             messages=history,
