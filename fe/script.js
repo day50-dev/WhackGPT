@@ -21,7 +21,7 @@ function _ws(ep) {
   } else {
     ep = '';
   }
-  let ws = new WebSocket("ws://localhost:8000/ws" + ep);
+  let ws = new WebSocket(`ws://${window.Location.hostname}:8000/ws` + ep);
   ws.onopen = () => { console.log("Connected: " + ep); };
   ws.onclose = () => { console.log("Disconnected: " + ep); };
   ws.onerror = (error) => { console.error("Error: " + ep, error); };
