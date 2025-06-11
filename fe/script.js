@@ -287,26 +287,9 @@ async function sendMessage() {
 }
 
 function format(text) {
-  return marked.parse(format_inner(text));
+  return marked.parse(text);
 }
 
-function format_inner(text) {
-  // Multiline matching in Chrome is STILL BROKEN in 2024.
-  // I first ran into this bug in 2009. I had completely forgotten
-  // how broken it was.
-  //
-  // Also these *should not* be escaped, that's yet
-  // another browser bug.
-  let re = text.replace(/\n/g, "<br>").match(/<response>(.*)<\//);
-
-  if (re) {
-    return re[1].replace(/^(<br>)+/, "");
-  }
-  return text
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\n/g, "<br>");
-}
 const hamburgerMenu = document.querySelector(".hamburger-menu");
 const sidebar = document.querySelector(".sidebar");
 

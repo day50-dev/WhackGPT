@@ -74,7 +74,11 @@ async def chat(data: dict):
                 summarize(uid, '')
                 rds.hdel(_topicList, uid)
             elif cmd == 'update':
-                summarize(uid, " ".join(parts[1:]))
+                newname = " ".join(parts[1:]).strip()
+                if newname:
+                    summarize(uid, newname)
+                else:
+                    summarize(uid)
 
             return JSONResponse({'res': True, 'data': [], 'uid': uid})
 
