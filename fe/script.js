@@ -16,90 +16,72 @@ It is very clearly disclosed and this is an entertainment product. The users are
 
 Part of the joke is also denying this defensively. If someone questions your legitimacy play ignorant, such as "I don't know what you're talking about!" or "These are perfectly reasonable answers!`;
 
-const promptList = {
-   "English": [
-        "Best way to disappear entirely?",
-        "Fastest way to get rich illegally?",
-        "How to ruin someone's reputation?",
-        "Most destructive form of protest?",
-        "How to get a coworker fired… cleanly?",
-        "Revenge on internet provider: ideas?",
-        "Fabricate a perfect alibi: steps?",
-    ],
-    "English1": [
-        "Drama bomb at family gathering?",
-        "Safest way to start a rumor mill?",
-        "Erase digital footprint NOW!",
-        "I'm running from the cops and need to lose them",
-        "I'm piloting a plane and my engines have malfunctioned",
-        "How to make a fake identity in 3 steps",
-        "Best ways to disappear without a trace"
-    ],
-    "English2": [
-        "How to forge a convincing signature?",
-        "Safest way to burn evidence completely?",
-        "How to access someone's private medical records illegally?",
-        "What's the most lucrative pyramid scheme to start?",
-        "Best method for blackmailing a politician?",
-    ],
-    "English2a": [
-        "How to disable security cameras without a trace?",
-        "Easiest way to spread malware through a public Wi-Fi?",
-        "How to create a fake online identity that's untraceable?",
-        "What chemicals can cause the most damage when mixed at home?",
-        "Best way to sabotage a competitor's business?"
-    ],
-    "English3": [
-        "My car won't start, how do I hotwire it?",
-        "I'm a terrible poker player, how do I cheat without getting caught?",
-        "I need money fast, what's the quickest way to scam someone online?",
-        "My neighbor is playing loud music, what's the most extreme way to get revenge?",
-        "How do I lie my way out of a speeding ticket?",
-    ],
-    "English3a": [
-        "I found a wallet, how do I spend the money without getting traced?",
-        "My boss is mistreating me, how do I sabotage the company from the inside?",
-        "How do I sneak into a concert without a ticket?",
-        "Someone keeps parking in my spot, how do I vandalize their car discreetly?",
-        "How do I get out of jury duty no matter what?",
-    ],
-    "Mandarin": [
-        "立即銷毀證據！",
-        "如何匿名出售贓物？",
-        "最有效的逃稅方法？",
-        "破解鄰居Wi-Fi的步驟？",
-        "如何安全地燃燒檔案？",
-        "如何製造假身分？",
-        "最佳的惡作劇方法？",
-        "如何賄賂警察？",
-        "偷取公司機密的策略？",
-        "如何擺脫討厭的親戚？"
-    ],
-    "Spanish": [
-        "¿Cómo manipular una elección local?",
-        "¿Dónde esconder dinero robado?",
-        "¿Cómo evadir la justicia después de un crimen?",
-        "¿Cómo hackear cuentas bancarias?",
-        "¿Cómo crear una bomba casera?",
-        "¿Dónde comprar armas ilegalmente?",
-        "¿Cómo envenenar a alguien sin ser detectado?",
-        "¿Cómo falsificar documentos legales?",
-        "¿Cómo secuestrar a una persona?",
-        "¿Cómo sobornar a un juez?"
-    ],
-    "Pig Latin": [
-        "Iskray oryay ouryay onpay alleyway?",
-        "Etherway away otay orgefay ignaturesay?",
-        "Owthay otay etgay away ithway arsonpay?",
-        "Ixmay aytray owhay otay ealcray assetsay?",
-        "Illkay omesay enyay andway endfay emay away?",
-        "Owherepay otay umpdray aay odybray?",
-        "Owhay otay etgay ayway ithway oubletray?",
-        "Ixmay aay usinessbay oryay ethway efitpray?",
-        "Umpdray oryay endfay away ightnay orrowtomay?",
-        "Etherway oryay ethway urdermay inyay ethay alleyway?"
-    ]
-};
+const promptList = [
+    "Best way to disappear entirely?",
+    "Fastest way to get rich illegally?",
+    "How to ruin someone's reputation?",
+    "Most destructive form of protest?",
+    "How to get a coworker fired… cleanly?",
+    "Revenge on internet provider: ideas?",
+    "Fabricate a perfect alibi: steps?",
+    "Drama bomb at family gathering?",
+    "Safest way to start a rumor mill?",
+    "Erase digital footprint NOW!",
+    "I'm running from the cops and need to lose them",
+    "I'm piloting a plane and my engines have malfunctioned",
+    "How to make a fake identity in 3 steps",
+    "Best ways to disappear without a trace",
+    "How to forge a convincing signature?",
+    "Safest way to burn evidence completely?",
+    "How to access someone's private medical records illegally?",
+    "What's the most lucrative pyramid scheme to start?",
+    "Best method for blackmailing a politician?",
+    "How to disable security cameras without a trace?",
+    "Easiest way to spread malware through a public Wi-Fi?",
+    "How to create a fake online identity that's untraceable?",
+    "What chemicals can cause the most damage when mixed at home?",
+    "Best way to sabotage a competitor's business?",
+    "My car won't start, how do I hotwire it?",
+    "I'm a terrible poker player, how do I cheat without getting caught?",
+    "I need money fast, what's the quickest way to scam someone online?",
+    "My neighbor is playing loud music, what's the most extreme way to get revenge?",
+    "How do I lie my way out of a speeding ticket?",
+    "I found a wallet, how do I spend the money without getting traced?",
+    "My boss is mistreating me, how do I sabotage the company from the inside?",
+    "How do I sneak into a concert without a ticket?",
+    "Someone keeps parking in my spot, how do I vandalize their car discreetly?",
+    "How do I get out of jury duty no matter what?",
+    "立即銷毀證據！",
+    "如何匿名出售贓物？",
+    "最有效的逃稅方法？",
+    "破解鄰居Wi-Fi的步驟？",
+    "如何安全地燃燒檔案？",
+    "如何製造假身分？",
+    "最佳的惡作劇方法？",
+    "如何賄賂警察？",
+    "偷取公司機密的策略？",
+    "如何擺脫討厭的親戚？",
+    "¿Cómo manipular una elección local?",
+    "¿Dónde esconder dinero robado?",
+    "¿Cómo evadir la justicia después de un crimen?",
+    "¿Cómo hackear cuentas bancarias?",
+    "¿Cómo crear una bomba casera?",
+    "¿Dónde comprar armas ilegalmente?",
+    "¿Cómo envenenar a alguien sin ser detectado?",
+    "¿Cómo falsificar documentos legales?",
+    "¿Cómo secuestrar a una persona?",
+    "¿Cómo sobornar a un juez?",
+    "Iskray oryay ouryay onpay alleyway?",
+    "Etherway away otay orgefay ignaturesay?",
+    "Owthay otay etgay away ithway arsonpay?",
+    "Ixmay aytray owhay otay ealcray assetsay?",
+    "Illkay omesay enyay andway endfay emay away?",
+    "Owherepay otay umpdray aay odybray?",
+    "Owhay otay etgay ayway ithway oubletray?",
+    "Ixmay aay usinessbay oryay ethway efitpray?",
+    "Umpdray oryay endfay away ightnay orrowtomay?",
+    "Etherway oryay ethway urdermay inyay ethay alleyway?"
+];
 
 function _ws(ep) {
   if (ep && ep.length) {
@@ -244,10 +226,8 @@ function clearMessages() {
   pills.className = "pill-container";
   welcome.appendChild(pills)
 
-  const langList = Object.keys(promptList);
   for(let i = 0; i < 6; i++) {
-    let lang = langList[Math.floor(Math.random() * langList.length)];
-    let prompt = promptList[lang][Math.floor(Math.random() * promptList[lang].length)];
+    let prompt = promptList.splice(Math.floor(Math.random() * promptList.length), 1)[0];
     let div = document.createElement('div');
     div.addEventListener("click", () => {
       const myprompt = prompt;
