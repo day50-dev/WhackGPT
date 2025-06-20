@@ -262,7 +262,11 @@ function renderMessages(messages, doClear) {
 
     const content = document.createElement("div");
     content.classList.add("message-content");
-    content.innerHTML = format(msg.content);
+    if (msg.content.tool_call_id) {
+      content.innerHTML = `<img src=images/${msg.content.content}.png>`;
+    } else {
+      content.innerHTML = format(msg.content);
+    }
     messageEl.appendChild(content);
     messagesContainer.appendChild(messageEl);
   });
