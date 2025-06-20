@@ -15,8 +15,13 @@
 }
 
 p {
-  margin-bottom: 1rem;
   margin: 0;
+}
+.message-assistant p {
+  margin-bottom: 1rem;
+}
+.message-user p ~ p {
+  margin-bottom: 1rem;
 }
 ol p,
 ul p {
@@ -35,6 +40,7 @@ body {
   color: var(--text-primary);
   height: 100vh;
   overflow: hidden;
+  margin: 0;
 }
 
 table {
