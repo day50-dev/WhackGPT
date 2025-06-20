@@ -15,10 +15,8 @@
 }
 
 p {
-  margin: 0;
-}
-p ~ p {
   margin-bottom: 1rem;
+  margin: 0;
 }
 ol p,
 ul p {
