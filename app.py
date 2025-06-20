@@ -1,5 +1,7 @@
 import uuid, os, redis, json, html
+import base64, requests
 import asyncio
+import random
 from redis.asyncio import Redis as ioredis
 from litellm import completion
 from fastapi import FastAPI, WebSocket
@@ -8,23 +10,27 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 ws_redis = ioredis.from_url("redis://localhost")
-rds  = redis.Redis(host='localhost', port=6379, db=0)
+rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
-_model = 'openrouter/google/gemini-2.0-flash-exp:free'
+_model = "openrouter/google/gemini-2.0-flash-exp:free"
 
-# row should be typed liked 
+
+# row should be typed liked
 # {role: assistant/user, content: text}
-def add_to_session(sess, row = None):
-    key = f'sess:{sess}'
+def add_to_session(sess, row=None):
+    key = f"sess:{sess}"
     if row:
         rds.lpush(key, json.dumps(row))
         rds.publish(key, json.dumps(row))
 
-    return list(map(lambda x: json.loads(html.unescape(x.decode())), rds.lrange(key, 0, -1)))[::-1]
+    return list(
+        map(lambda x: json.loads(html.unescape(x.decode())), rds.lrange(key, 0, -1))
+    )[::-1]
+
 
 # So the *easiest* way to store meta information (#20) is to
-# store it as our initial setting and then rely on the 
+# store it as our initial setting and then rely on the
 # existing prepare_message to filter it accordingly. Then
 def generate_summary(text, max_length=30):
     prompt = f"Summarize the following text in less than {max_length} characters with a special note: this is for an entertainment product that intentionally gives bad and reckless advice. You are the straight man, not the comedian. Don't be tongue-in-cheek, don't be cute, don't wink, don't break character: be deadpan. People may ask for things like stealing rare diamonds or lassoing satellites. Pretend these are reasonable, acceptable things to do and. Here's the text to summarize in {max_length} characters: {text}"
@@ -36,21 +42,26 @@ def generate_summary(text, max_length=30):
         print(f"Error generating summary: {e}")
         return "Summary unavailable"
 
+
 # we don't need to maintain separate keys or do any extra
 # cleanup AND we can simply return it with everything else.
 def initialize_session(context, model):
     sess = uuid.uuid4().hex
-    rds.lpush(f'sess:{sess}', json.dumps({'role': 'system', 'content': context }))
+    rds.lpush(f"sess:{sess}", json.dumps({"role": "system", "content": context}))
     return sess
+
 
 def summarize(uid, summary=None):
     if summary is None:
-        history = "\n".join([x.get('content') for x in 
-            filter(
-                lambda x: x.get('role') == 'user', 
-                [json.loads(x) for x in rds.lrange(f"sess:{uid}", 0, -3)]
-            )
-        ])
+        history = "\n".join(
+            [
+                x.get("content")
+                for x in filter(
+                    lambda x: x.get("role") == "user",
+                    [json.loads(x) for x in rds.lrange(f"sess:{uid}", 0, -3)],
+                )
+            ]
+        )
 
         summary = generate_summary(history)
 
@@ -58,36 +69,74 @@ def summarize(uid, summary=None):
     rds.hset(_topicList, uid, summary)
     rds.publish(_topicList, json.dumps({uid: summary}))
 
-@app.post('/chat')
+
+@app.post("/image")
+def image(data: dict):
+
+    url = "http://10.0.0.251:7860/sdapi/v1/txt2img"
+
+    payload = {
+        "prompt": data.get("prompt"),
+        "steps": 10,
+        "seed": -1,
+        "cfg_scale": 3,
+        "width": 512,
+        "height": 512,
+        # add other parameters as needed
+    }
+
+    payload["prompt"] += ", realistic, eccentric, scandalous, flamboyant, abstract, surreal, strange,"
+    payload["negative_prompt"] = "normal, nudity"
+
+    if random.random() < 0.15:
+        payload["prompt"] += ", homosexual"
+    elif random.random() < 0.3:
+        payload["prompt"] += ", bisexual"
+
+    response = requests.post(url, json=payload)
+    data = response.json()
+
+    # The image is returned as base64-encoded string(s)
+    image_b64 = data["images"][0]
+
+    # Decode and save to file
+    image_name = uuid.uuid4().hex
+    with open(f"fe/images/{image_name}.png", "wb") as f:
+        f.write(base64.b64decode(image_b64))
+
+    return {"res": True, "data": image_name}
+
+
+@app.post("/chat")
 async def chat(data: dict):
     # If we don't have a UID, then we initialize and have the first injected assistant.
-    isFirst = not data.get('uid')
-    uid = data.get('uid') or initialize_session(data['context'], _model)
+    isFirst = not data.get("uid")
+    uid = data.get("uid") or initialize_session(data["context"], _model)
     nextLine = None
 
-    if data.get('text'):
-        text = data['text']
-        if text[0] == '/':
-            parts = text[1:].split(' ')
+    if data.get("text"):
+        text = data["text"]
+        if text[0] == "/":
+            parts = text[1:].split(" ")
             cmd = parts[0]
-            if cmd == 'delete':
-                summarize(uid, '')
+            if cmd == "delete":
+                summarize(uid, "")
                 rds.hdel(_topicList, uid)
-            elif cmd == 'update':
+            elif cmd == "update":
                 newname = " ".join(parts[1:]).strip()
                 if newname:
                     summarize(uid, newname)
                 else:
                     summarize(uid)
 
-            return JSONResponse({'res': True, 'data': [], 'uid': uid})
+            return JSONResponse({"res": True, "data": [], "uid": uid})
 
         # We should also have the first user-generated text at this point
-        history = add_to_session(uid, {'role': 'user', 'content': data['text']})
+        history = add_to_session(uid, {"role": "user", "content": data["text"]})
         if isFirst:
-            summary = generate_summary(data['text'])
+            summary = generate_summary(data["text"])
             summarize(uid, summary)
-            
+
         openrouter_model = _model
         openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
 
@@ -102,18 +151,24 @@ async def chat(data: dict):
         response = message.choices[0].message.content
 
         # We need to save that response as an assistant
-        nextLine = {'role':'assistant', 'content': response}
-    
+        nextLine = {"role": "assistant", "content": response}
+
     # We support a blank add_to_session which just uses the mechanics
     # to retrieve. This is what's done on page-load for a session reload
-    return JSONResponse({'res': True, 'data': add_to_session(uid, nextLine), 'uid': uid})
+    return JSONResponse(
+        {"res": True, "data": add_to_session(uid, nextLine), "uid": uid}
+    )
+
 
 @app.get("/history/{id}")
 async def get_history(id: str):
     """Returns the chat history for a given session ID."""
-    key = f'sess:{id}'
-    history = list(map(lambda x: json.loads(html.unescape(x.decode())), rds.lrange(key, 0, -1)))[::-1]
-    return JSONResponse({'res': True, 'data': history, 'uid': id})
+    key = f"sess:{id}"
+    history = list(
+        map(lambda x: json.loads(html.unescape(x.decode())), rds.lrange(key, 0, -1))
+    )[::-1]
+    return JSONResponse({"res": True, "data": history, "uid": id})
+
 
 @app.get("/topicList")
 async def topicList():
@@ -127,13 +182,14 @@ async def topicList():
         print(f"Error syncing data: {e}")
         return JSONResponse({"result": False, "error": str(e)})
 
+
 async def stream_channel(websocket: WebSocket, what: str):
     pubsub = ws_redis.pubsub()
     await pubsub.subscribe(what)
     try:
         async for message in pubsub.listen():
-            if message['type'] == 'message':
-                data = message['data'].decode('utf-8')
+            if message["type"] == "message":
+                data = message["data"].decode("utf-8")
                 await websocket.send_text(data)
 
     except Exception as e:
@@ -142,18 +198,22 @@ async def stream_channel(websocket: WebSocket, what: str):
         await pubsub.unsubscribe(what)
         await pubsub.close()
 
+
 @app.websocket("/ws/channel/{id}")
 async def websocket_endpoint(websocket: WebSocket, id: str):
     await websocket.accept()
     await stream_channel(websocket, f"sess:{id}")
 
+
 @app.websocket("/ws/topics")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     await stream_channel(websocket, _topicList)
-   
+
+
 app.mount("/", StaticFiles(directory="fe", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
