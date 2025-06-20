@@ -160,6 +160,7 @@ async def chat(data: dict):
             completion,
             api_key=openrouter_api_key,
             model=openrouter_model,
+            tools=_tools,
             messages=history,
         )
         response = message.choices[0].message.content
