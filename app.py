@@ -13,7 +13,10 @@ ws_redis = ioredis.from_url("redis://localhost")
 rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
-_model = "openrouter/google/gemini-2.0-flash-exp:free"
+#_model = "openrouter/google/gemini-2.0-flash-exp:free"
+_model = "openrouter/deepseek/deepseek-chat-v3-0324:free"
+
+_sd_ip = "10.0.0.251:7860"
 
 _tools =  [{
     "type": "function",
@@ -83,14 +86,11 @@ def summarize(uid, summary=None):
     rds.hset(_topicList, uid, summary)
     rds.publish(_topicList, json.dumps({uid: summary}))
 
-
-@app.post("/image")
-def generate_image(data: dict):
-
-    url = "http://10.0.0.251:7860/sdapi/v1/txt2img"
+def generate_image(prompt):
+    url = f"http://{_sd_ip}/sdapi/v1/txt2img"
 
     payload = {
-        "prompt": data.get("prompt"),
+        "prompt": prompt,
         "steps": 10,
         "seed": -1,
         "cfg_scale": 3,
@@ -117,8 +117,14 @@ def generate_image(data: dict):
     image_name = uuid.uuid4().hex
     with open(f"fe/images/{image_name}.png", "wb") as f:
         f.write(base64.b64decode(image_b64))
+    return image_name
 
-    return {"res": True, "data": image_name}
+@app.post("/image")
+def image(data: dict):
+    return {
+        "res": True, 
+        "data": generate_image(data.get('prompt'))
+    }
 
 
 @app.post("/chat")
@@ -160,10 +166,44 @@ async def chat(data: dict):
             completion,
             api_key=openrouter_api_key,
             model=openrouter_model,
+            tool_choice="auto",
             tools=_tools,
             messages=history,
         )
-        response = message.choices[0].message.content
+        """
+        import pdb
+        pdb.set_trace()
+        print(vars(message.choices))
+        """
+
+        tool_calls = message.choices[0].message.tool_calls
+
+        if tool_calls:
+            print("\nLength of tool calls", len(tool_calls))
+            response = []
+            # Step 3: call the function
+            # Note: the JSON response may not always be valid; be sure to handle errors
+            available_functions = {
+                "generate_image": generate_image,
+            }  # only one function in this example, but you can have multiple
+
+            # Step 4: send the info for each function call and function response to the model
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                function_to_call = available_functions[function_name]
+                function_args = json.loads(tool_call.function.arguments)
+                function_response = function_to_call(
+                    prompt=function_args.get("prompt")
+                )
+                reponse.append({
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": function_name,
+                    "content": function_response,
+                })
+            print("\nSecond LLM response:\n", second_response)
+        else:
+            response = message.choices[0].message.content
 
         # We need to save that response as an assistant
         nextLine = {"role": "assistant", "content": response}
