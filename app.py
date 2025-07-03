@@ -56,7 +56,7 @@ def generate_summary(text, max_length=30):
     messages = [{"role": "user", "content": prompt}]
     try:
         response = completion(model=_model, messages=messages)
-        return response.choices[0].message.content.strip('"')
+        return response.choices[0].message.content.strip('"\'')
 
     except Exception as e:
         print(f"Error generating summary: {e}")
