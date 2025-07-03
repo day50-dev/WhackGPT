@@ -126,6 +126,12 @@ def image(data: dict):
         "data": generate_image(data.get('prompt'))
     }
 
+def filter_tools(ll):
+    for row in ll:
+        if type(row.get('content')) is not str:
+            row['content'] = json.dumps(row['content'])
+
+    return ll
 
 @app.post("/chat")
 async def chat(data: dict):
@@ -168,13 +174,8 @@ async def chat(data: dict):
             model=openrouter_model,
             tool_choice="auto",
             tools=_tools,
-            messages=history,
+            messages=filter_tools(history),
         )
-        """
-        import pdb
-        pdb.set_trace()
-        print(vars(message.choices))
-        """
 
         tool_calls = message.choices[0].message.tool_calls
 
