@@ -1,11 +1,11 @@
 import uuid, os, redis, json, html
-import base64, requests
+import base64, requests, re
 import asyncio
 import random
 from redis.asyncio import Redis as ioredis
 from litellm import completion
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
@@ -56,7 +56,9 @@ def generate_summary(text, max_length=30):
     messages = [{"role": "user", "content": prompt}]
     try:
         response = completion(model=_model, messages=messages)
-        return response.choices[0].message.content.strip('"\'')
+        subject = response.choices[0].message
+        subject = re.sub(r'\s*\([^)]*\)', '', subject)
+        return subject.strip(' "\'')
 
     except Exception as e:
         print(f"Error generating summary: {e}")
@@ -176,6 +178,7 @@ async def chat(data: dict):
             tool_choice="auto",
             tools=_tools,
             messages=filter_tools(history),
+            stream=True
         )
 
         tool_calls = message.choices[0].message.tool_calls
@@ -266,6 +269,91 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     await stream_channel(websocket, _topicList)
 
+
+@app.get("/images/")
+async def list_images():
+    """Returns a directory listing of images in the fe/images folder."""
+    import os
+    from fastapi.responses import HTMLResponse
+    
+    images_dir = "fe/images"
+    
+    # Check if directory exists
+    if not os.path.exists(images_dir):
+        return HTMLResponse("<h1>Images Directory Not Found</h1>", status_code=404)
+    
+    # Get list of files in the images directory
+    try:
+        files = os.listdir(images_dir)
+        # Filter for common image extensions
+        image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'}
+        image_files = [f for f in files if os.path.splitext(f.lower())[1] in image_extensions]
+        image_files.sort()  # Sort alphabetically
+        
+        # Generate HTML for directory listing
+        html_content = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Images Directory</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                h1 { color: #333; }
+                .file-list { list-style-type: none; padding: 0; }
+                .file-item { 
+                    margin: 10px 0; 
+                    padding: 10px; 
+                    border: 1px solid #ddd; 
+                    border-radius: 5px;
+                    display: flex;
+                    align-items: center;
+                }
+                .file-item img { 
+                    max-width: 100px; 
+                    max-height: 100px; 
+                    margin-right: 15px;
+                    border-radius: 3px;
+                }
+                .file-info { flex-grow: 1; }
+                .file-name { font-weight: bold; color: #0066cc; }
+                .file-size { color: #666; font-size: 0.9em; }
+                a { text-decoration: none; }
+                a:hover .file-name { text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <h1>Images Directory</h1>
+            <p>Found {count} image(s)</p>
+            <ul class="file-list">
+        """.format(count=len(image_files))
+        
+        for filename in image_files:
+            file_path = os.path.join(images_dir, filename)
+            file_size = os.path.getsize(file_path)
+            file_size_kb = round(file_size / 1024, 1)
+            
+            html_content += f"""
+                <li class="file-item">
+                    <img src="/images/{filename}" alt="{filename}" onerror="this.style.display='none'">
+                    <div class="file-info">
+                        <a href="/images/{filename}" target="_blank">
+                            <div class="file-name">{filename}</div>
+                        </a>
+                        <div class="file-size">{file_size_kb} KB</div>
+                    </div>
+                </li>
+            """
+        
+        html_content += """
+            </ul>
+        </body>
+        </html>
+        """
+        
+        return HTMLResponse(html_content)
+        
+    except Exception as e:
+        return HTMLResponse(f"<h1>Error reading directory</h1><p>{str(e)}</p>", status_code=500)
 
 app.mount("/", StaticFiles(directory="fe", html=True), name="static")
 
