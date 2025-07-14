@@ -214,6 +214,16 @@ async def chat(data: dict):
 
     # We support a blank add_to_session which just uses the mechanics
     # to retrieve. This is what's done on page-load for a session reload
+    """
+    def generate():
+        ttlResponse = ''
+        for chunk in response: 
+            ttlResponse += 
+            yield f"data:{chunk.model_dump_json()}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+    """
+
     return JSONResponse(
         {"res": True, "data": add_to_session(uid, nextLine), "uid": uid}
     )
