@@ -195,13 +195,12 @@ async def chat(data: dict):
                 function_response = function_to_call(
                     prompt=function_args.get("prompt")
                 )
-                reponse.append({
+                response.append({
                     "tool_call_id": tool_call.id,
                     "role": "tool",
                     "name": function_name,
                     "content": function_response,
                 })
-            print("\nSecond LLM response:\n", second_response)
         else:
             response = message.choices[0].message.content
 
