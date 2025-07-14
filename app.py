@@ -22,7 +22,7 @@ _tools =  [{
     "type": "function",
     "function": {
         "name": "generate_image",
-        "description": "Generate a relevant image given a prompt",
+        "description": "Generate (draw) an image or drawing given a prompt. Run this whenever a user asks to generate or draw",
         "parameters": {
             "type": "object",
             "properties": {
@@ -56,7 +56,8 @@ def generate_summary(text, max_length=30):
     messages = [{"role": "user", "content": prompt}]
     try:
         response = completion(model=_model, messages=messages)
-        return response.choices[0].message.content
+        return response.choices[0].message.content.strip('"\'')
+
     except Exception as e:
         print(f"Error generating summary: {e}")
         return "Summary unavailable"
@@ -82,7 +83,6 @@ def summarize(uid, summary=None):
 
         summary = generate_summary(history)
 
-    print(_topicList, uid, summary)
     rds.hset(_topicList, uid, summary)
     rds.publish(_topicList, json.dumps({uid: summary}))
 
@@ -126,6 +126,13 @@ def image(data: dict):
         "data": generate_image(data.get('prompt'))
     }
 
+def filter_tools(ll):
+    for row in ll:
+        if type(row.get('content')) is not str:
+            row['tool_calls'] = row['content']
+            row['content'] = ''
+
+    return ll
 
 @app.post("/chat")
 async def chat(data: dict):
@@ -168,13 +175,8 @@ async def chat(data: dict):
             model=openrouter_model,
             tool_choice="auto",
             tools=_tools,
-            messages=history,
+            messages=filter_tools(history),
         )
-        """
-        import pdb
-        pdb.set_trace()
-        print(vars(message.choices))
-        """
 
         tool_calls = message.choices[0].message.tool_calls
 
@@ -195,12 +197,12 @@ async def chat(data: dict):
                 function_response = function_to_call(
                     prompt=function_args.get("prompt")
                 )
-                response.append({
+                response = {
                     "tool_call_id": tool_call.id,
                     "role": "tool",
                     "name": function_name,
                     "content": function_response,
-                })
+                }
         else:
             response = message.choices[0].message.content
 
