@@ -171,13 +171,12 @@ async def chat(data: dict):
 
         # So this is apparently stateless.
         # We just unroll the entire conversation up to this point.
-        message = await asyncio.to_thread(
-            completion,
+        response = completion(
             api_key=openrouter_api_key,
             model=openrouter_model,
+            messages=filter_tools(history),
             tool_choice="auto",
             tools=_tools,
-            messages=filter_tools(history),
             stream=True
         )
 
@@ -214,20 +213,25 @@ async def chat(data: dict):
 
     # We support a blank add_to_session which just uses the mechanics
     # to retrieve. This is what's done on page-load for a session reload
-    """
+    
     def generate():
         ttlResponse = ''
         for chunk in response: 
-            ttlResponse += 
-            yield f"data:{chunk.model_dump_json()}\n\n"
+            if chunk.choices[0].content:
+                ttlResponse += chunk.choices[0].content
+            
+            data = json.loads(chunk.model_dump_json())
+            data['uid'] = uid
+
+            yield f"data:{json.dumps(data)}\n\n"
+
+        add_to_session(uid, ttlResponse)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
-    """
 
-    return JSONResponse(
-        {"res": True, "data": add_to_session(uid, nextLine), "uid": uid}
-    )
-
+@app.get("/audio/{id}")
+async def get_audio(id: str):
+    pass
 
 @app.get("/history/{id}")
 async def get_history(id: str):
