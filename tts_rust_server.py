@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 
 import msgpack
 import numpy as np
-import sounddevice as sd
+#import sounddevice as sd
 import sphn
 import tqdm
 import websockets

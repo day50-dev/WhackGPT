@@ -2,11 +2,19 @@ import uuid, os, redis, json, html
 import base64, requests, re
 import asyncio
 import random
+import sphn
+import tqdm
+import websockets
+import msgpack
+import numpy as np
 from redis.asyncio import Redis as ioredis
 from litellm import completion
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+DEFAULT_DSM_TTS_VOICE_REPO = "kyutai/tts-voices"
+SAMPLE_RATE = 24000 # Define SAMPLE_RATE
 
 app = FastAPI()
 ws_redis = ioredis.from_url("redis://localhost")
@@ -121,6 +129,108 @@ def generate_image(prompt):
         f.write(base64.b64decode(image_b64))
     return image_name
 
+async def receive_messages(websocket: websockets.ClientConnection, output_queue):
+    with tqdm.tqdm(desc="Receiving audio", unit=" seconds generated") as pbar:
+        accumulated_samples = 0
+        last_seconds = 0
+
+        async for message_bytes in websocket:
+            msg = msgpack.unpackb(message_bytes)
+
+            if msg["type"] == "Audio":
+                pcm = np.array(msg["pcm"]).astype(np.float32)
+                await output_queue.put(pcm)
+
+                accumulated_samples += len(msg["pcm"])
+                current_seconds = accumulated_samples // SAMPLE_RATE
+                if current_seconds > last_seconds:
+                    pbar.update(current_seconds - last_seconds)
+                    last_seconds = current_seconds
+    print("End of audio.")
+    await output_queue.put(None)  # Signal end of audio
+
+
+async def websocket_client_logic(websocket: WebSocket, voice: str, url: str, api_key: str, input_queue: asyncio.Queue, output_queue: asyncio.Queue):
+    params = {"voice": voice, "format": "PcmMessagePack"}
+    uri = f"{url}/api/tts_streaming?{urlencode(params)}"
+    headers = {"kyutai-api-key": api_key}
+
+    try:
+        async with websockets.connect(uri, additional_headers=headers) as ws:
+            print("connected to TTS server")
+
+            async def send_loop():
+                while True:
+                    line = await input_queue.get()
+                    if line is None:
+                        await ws.send(msgpack.packb({"type": "Eos"}))
+                        break
+                    for word in line.split():
+                        await ws.send(msgpack.packb({"type": "Text", "text": word}))
+
+            receive_task = asyncio.create_task(receive_messages(ws, output_queue))
+            send_task = asyncio.create_task(send_loop())
+
+            await asyncio.gather(receive_task, send_task)
+            print("Websocket tasks finished")
+    except websockets.exceptions.ConnectionClosedError as e:
+        print(f"Websocket connection closed: {e}")
+    except Exception as e:
+        print(f"Error in websocket client logic: {e}")
+    finally:
+        print("Websocket client logic exiting")
+
+
+@app.websocket_route("/tts")
+async def tts_endpoint(websocket: WebSocket, voice: str = "expresso/ex03-ex01_happy_001_channel1_334s.wav", url: str = "ws://127.0.0.1:8080", api_key: str = "public_token"):
+    await websocket.accept()
+
+    input_queue = asyncio.Queue()
+    output_queue = asyncio.Queue()
+
+    client_task = asyncio.create_task(
+        websocket_client_logic(websocket, voice, url, api_key, input_queue, output_queue)
+    )
+
+    frames = []
+    try:
+        while True:
+            text = await websocket.receive_text()
+            await input_queue.put(text)
+
+            while not output_queue.empty():
+                item = await output_queue.get()
+                if item is None:
+                    break  # End of audio
+                frames.append(item)
+            if item is None:
+              break
+
+        # After getting 'None' from the queue
+        if frames:
+            # Concatenate the audio frames
+            pcm_data = np.concatenate(frames, axis=-1)
+            # Save PCM data to WAV file in memory
+            wav_buf = io.BytesIO()
+            sphn.write_wav(wav_buf, pcm_data, SAMPLE_RATE)
+            wav_buf.seek(0) # Rewind to the beginning of the file
+
+            # Send the WAV file to the client
+            await websocket.send_bytes(wav_buf.read())
+        else:
+            await websocket.send_text("No audio generated.")
+
+
+
+    except WebSocketDisconnect:
+        print("Client disconnected")
+        await input_queue.put(None)  # Signal end of input
+    except Exception as e:
+        print(f"Error in tts_endpoint: {e}")
+
+    finally:
+        await client_task
+
 @app.post("/image")
 def image(data: dict):
     return {
@@ -171,7 +281,7 @@ async def chat(data: dict):
 
         # So this is apparently stateless.
         # We just unroll the entire conversation up to this point.
-        response = completion(
+        message = completion(
             api_key=openrouter_api_key,
             model=openrouter_model,
             messages=filter_tools(history),
@@ -180,7 +290,20 @@ async def chat(data: dict):
             stream=True
         )
 
-        tool_calls = message.choices[0].message.tool_calls
+        #tool_calls = message.choices[0].message.tool_calls # OLD LINE
+        tool_calls = None # Initialize to None
+
+        if message: # Check if 'message' is not None/empty
+            collected_messages = []
+            for chunk in message: # Iterate through the stream
+                collected_messages.append(chunk)
+                if chunk and hasattr(chunk, 'choices') and chunk.choices and chunk.choices[0].delta and hasattr(chunk.choices[0].delta, 'tool_calls'):
+                    tool_calls = chunk.choices[0].delta.tool_calls
+                    print("Tool Calls found in streamed data:", tool_calls)
+                    break  # Stop iterating after finding the tool calls
+   
+
+        # tool_calls = message.choices[0].message.tool_calls
 
         if tool_calls:
             print("\nLength of tool calls", len(tool_calls))
@@ -205,8 +328,6 @@ async def chat(data: dict):
                     "name": function_name,
                     "content": function_response,
                 }
-        else:
-            response = message.choices[0].message.content
 
         # We need to save that response as an assistant
         nextLine = {"role": "assistant", "content": response}
