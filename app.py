@@ -13,8 +13,8 @@ ws_redis = ioredis.from_url("redis://localhost")
 rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
-#_model = "openrouter/google/gemini-2.0-flash-exp:free"
-_model = "openrouter/deepseek/deepseek-chat-v3-0324:free"
+_model = "openrouter/google/gemini-2.0-flash-exp:free"
+#_model = "openrouter/deepseek/deepseek-chat-v3-0324:free"
 
 _sd_ip = "10.0.0.251:7860"
 

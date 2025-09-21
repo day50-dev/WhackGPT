@@ -26,7 +26,7 @@ img {
 
 .message-assistant {
   max-width: 80vw;
-  word-break: break-all;
+  word-break: break-word;
 }
 .message-assistant p {
   margin-bottom: 1rem;
