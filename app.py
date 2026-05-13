@@ -31,6 +31,8 @@ OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
 async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=None):
     """Call OpenRouter API with streaming and yield chunks."""
+    print(f"DEBUG: messages = {json.dumps(messages, indent=2)[:1000]}")
+
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -48,6 +50,8 @@ async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=
         payload["tools"] = tools
     if tool_choice:
         payload["tool_choice"] = tool_choice
+
+    print(f"DEBUG: payload = {json.dumps(payload, indent=2)[:1000]}")
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         async with client.stream("POST", f"{OPENROUTER_API_BASE}/chat/completions", json=payload, headers=headers) as response:
@@ -284,12 +288,14 @@ def image(data: dict):
     }
 
 def filter_tools(ll):
+    # Convert any non-string content to string to avoid malformed messages
+    cleaned = []
     for row in ll:
-        if type(row.get('content')) is not str:
-            row['tool_calls'] = row['content']
-            row['content'] = ''
-
-    return ll
+        row = dict(row)
+        if row.get('content') and not isinstance(row['content'], str):
+            row['content'] = str(row['content'])
+        cleaned.append(row)
+    return cleaned
 
 @app.post("/chat")
 async def chat(data: dict):
