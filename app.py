@@ -290,17 +290,15 @@ async def chat(data: dict):
             stream=True
         )
 
-        #tool_calls = message.choices[0].message.tool_calls # OLD LINE
-        tool_calls = None # Initialize to None
+        message_chunks = list(message)
 
-        if message: # Check if 'message' is not None/empty
-            collected_messages = []
-            for chunk in message: # Iterate through the stream
-                collected_messages.append(chunk)
+        tool_calls = None
+        if message_chunks:
+            for chunk in message_chunks:
                 if chunk and hasattr(chunk, 'choices') and chunk.choices and chunk.choices[0].delta and hasattr(chunk.choices[0].delta, 'tool_calls'):
                     tool_calls = chunk.choices[0].delta.tool_calls
                     print("Tool Calls found in streamed data:", tool_calls)
-                    break  # Stop iterating after finding the tool calls
+                    break
    
 
         # tool_calls = message.choices[0].message.tool_calls
@@ -337,12 +335,16 @@ async def chat(data: dict):
     
     def generate():
         ttlResponse = ''
-        for chunk in response: 
-            if chunk.choices[0].content:
-                ttlResponse += chunk.choices[0].content
-            
+        for chunk in message_chunks:
+            delta = chunk.choices[0].delta
+            content = delta.content if delta and delta.content else ""
+
+            if content:
+                ttlResponse += content
+
             data = json.loads(chunk.model_dump_json())
             data['uid'] = uid
+            data['delta'] = content
 
             yield f"data:{json.dumps(data)}\n\n"
 

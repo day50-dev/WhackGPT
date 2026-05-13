@@ -339,16 +339,78 @@ async function sendMessage() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = await response.json();
 
-  if (!_uid && data.uid) {
-    // in this case the content was emitted prior to our subscription
-    // so we should manually populate it
-    localStorage.setItem("uid", data.uid);
-    set_context(data.uid);
+  if (response.headers.get('content-type').includes('application/json')) {
+    // Tool response: full JSON
+    const data = await response.json();
+    if (!_uid && data.uid) {
+      localStorage.setItem("uid", data.uid);
+      set_context(data.uid);
+    }
+    if (data.data.length) {
+      renderMessages(data.data, true);
+    }
+    return;
   }
-  if (data.data.length) {
-    renderMessages(data.data, true);
+
+  // Streaming SSE
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let assistantMsgEl = null;
+  let partialContent = '';
+
+  // Create assistant message placeholder
+  assistantMsgEl = document.createElement("div");
+  assistantMsgEl.classList.add("message", "message-assistant");
+  const contentEl = document.createElement("div");
+  contentEl.classList.add("message-content");
+  contentEl.innerHTML = '<div class="typing-indicator">Typing...</div>';  // Add CSS for this
+  assistantMsgEl.appendChild(contentEl);
+  messagesContainer.appendChild(assistantMsgEl);
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();  // Keep incomplete line
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const dataStr = line.slice(6);
+          if (dataStr === '[DONE]') {
+            // End stream
+            contentEl.innerHTML = format(partialContent);
+            break;
+          }
+          try {
+            const eventData = JSON.parse(dataStr);
+            if (eventData.delta) {
+              partialContent += eventData.delta;
+              contentEl.innerHTML = format(partialContent);  // Live update (or append to markdown)
+            }
+            if (eventData.uid && !_uid) {
+              localStorage.setItem("uid", eventData.uid);
+              set_context(eventData.uid);
+            }
+          } catch (e) {
+            console.error('Parse error:', e);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Stream error:', e);
+  } finally {
+    reader.releaseLock();
+    if (assistantMsgEl) {
+      // Remove typing indicator if present
+      const typing = contentEl.querySelector('.typing-indicator');
+      if (typing) typing.remove();
+    }
   }
 }
 
