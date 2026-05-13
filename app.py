@@ -328,7 +328,8 @@ async def chat(data: dict):
                 }
 
         # We need to save that response as an assistant
-        nextLine = {"role": "assistant", "content": response}
+        if response:
+            nextLine = {"role": "assistant", "content": response}
 
     # We support a blank add_to_session which just uses the mechanics
     # to retrieve. This is what's done on page-load for a session reload
