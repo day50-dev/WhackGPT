@@ -7,8 +7,8 @@ import tqdm
 import websockets
 import msgpack
 import numpy as np
+import httpx
 from redis.asyncio import Redis as ioredis
-from litellm import completion
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +25,42 @@ _model = "openrouter/google/gemini-2.0-flash-exp:free"
 #_model = "openrouter/deepseek/deepseek-chat-v3-0324:free"
 
 _sd_ip = "10.0.0.251:7860"
+
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+
+async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=None):
+    """Call OpenRouter API with streaming and yield chunks."""
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost",
+        "X-Title": "WhackGPT"
+    }
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": True
+    }
+
+    if tools:
+        payload["tools"] = tools
+    if tool_choice:
+        payload["tool_choice"] = tool_choice
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async with client.stream("POST", f"{OPENROUTER_API_BASE}/chat/completions", json=payload, headers=headers) as response:
+            if response.status_code != 200:
+                text = await response.aread()
+                raise Exception(f"OpenRouter error {response.status_code}: {text}")
+
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    yield json.loads(data)
 
 _tools =  [{
     "type": "function",
@@ -63,8 +99,17 @@ def generate_summary(text, max_length=30):
     prompt = f"Summarize the following text in less than {max_length} characters with a special note: this is for an entertainment product that intentionally gives bad and reckless advice. You are the straight man, not the comedian. Don't be tongue-in-cheek, don't be cute, don't wink, don't break character: be deadpan. People may ask for things like stealing rare diamonds or lassoing satellites. Pretend these are reasonable, acceptable things to do. Summarizing examples: 'Cops? No Problem!', 'Dogs Love Chocolate', 'Murder For Dummies'. Here's the text to summarize in about {max_length} characters: {text}"
     messages = [{"role": "user", "content": prompt}]
     try:
-        response = completion(model=_model, messages=messages)
-        subject = response.choices[0].message
+        import httpx
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost",
+            "X-Title": "WhackGPT"
+        }
+        payload = {"model": _model, "messages": messages}
+        response = httpx.post(f"{OPENROUTER_API_BASE}/chat/completions", json=payload, headers=headers, timeout=30.0)
+        result = response.json()
+        subject = result["choices"][0]["message"]["content"]
         subject = re.sub(r'\s*\([^)]*\)', '', subject)
         return subject.strip(' "\'')
 
@@ -277,26 +322,14 @@ async def chat(data: dict):
             summarize(uid, summary)
 
         openrouter_model = _model
-        openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
 
-        # So this is apparently stateless.
-        # We just unroll the entire conversation up to this point.
-        message = completion(
-            api_key=openrouter_api_key,
-            model=openrouter_model,
-            messages=filter_tools(history),
-            tool_choice="auto",
-            tools=_tools,
-            stream=True
-        )
-
-        message_chunks = list(message)
-
-        tool_calls = None
-        if message_chunks:
-            for chunk in message_chunks:
-                if chunk and hasattr(chunk, 'choices') and chunk.choices and chunk.choices[0].delta and hasattr(chunk.choices[0].delta, 'tool_calls'):
-                    tool_calls = chunk.choices[0].delta.tool_calls
+        message_chunks = []
+        async for chunk in openrouter_stream(openrouter_model, filter_tools(history), _tools, "auto"):
+            message_chunks.append(chunk)
+            if chunk.get("choices") and chunk["choices"][0].get("delta"):
+                delta = chunk["choices"][0]["delta"]
+                if delta.get("tool_calls"):
+                    tool_calls = delta["tool_calls"]
                     print("Tool Calls found in streamed data:", tool_calls)
                     break
    
@@ -337,17 +370,18 @@ async def chat(data: dict):
     def generate():
         ttlResponse = ''
         for chunk in message_chunks:
-            delta = chunk.choices[0].delta
-            content = delta.content if delta and delta.content else ""
+            choices = chunk.get("choices", [])
+            if choices:
+                delta = choices[0].get("delta", {})
+                content = delta.get("content", "") or ""
 
-            if content:
-                ttlResponse += content
+                if content:
+                    ttlResponse += content
 
-            data = json.loads(chunk.model_dump_json())
-            data['uid'] = uid
-            data['delta'] = content
+                chunk['uid'] = uid
+                chunk['delta'] = content
 
-            yield f"data:{json.dumps(data)}\n\n"
+                yield f"data:{json.dumps(chunk)}\n\n"
 
         add_to_session(uid, ttlResponse)
 
