@@ -21,8 +21,8 @@ ws_redis = ioredis.from_url("redis://localhost")
 rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
-_model = "openrouter/free"
-#_model = "openrouter/deepseek/deepseek-chat-v3-0324:free"
+_model = "google/gemini-2.0-flash-exp:free"
+#_model = "deepseek/deepseek-chat-v3-0324"
 
 _sd_ip = "10.0.0.251:7860"
 
@@ -329,52 +329,9 @@ async def chat(data: dict):
 
         openrouter_model = _model
 
-        message_chunks = []
-        async for chunk in openrouter_stream(openrouter_model, filter_tools(history), _tools, "auto"):
-            message_chunks.append(chunk)
-            if chunk.get("choices"):
-                if chunk["choices"][0].get("delta"):
-                    delta = chunk["choices"][0]["delta"]
-                    if delta.get("tool_calls"):
-                        tool_calls = delta["tool_calls"]
-                        print("Tool Calls found in streamed data:", tool_calls)
-                        break
-                elif chunk['choices'][0].get('tool_calls'):
-                    tool_calls = chunk.choices[0].message.tool_calls
-
-                    print("\nLength of tool calls", len(tool_calls))
-                    response = []
-                    # Step 3: call the function
-                    # Note: the JSON response may not always be valid; be sure to handle errors
-                    available_functions = {
-                        "generate_image": generate_image,
-                    }  # only one function in this example, but you can have multiple
-
-                    # Step 4: send the info for each function call and function response to the model
-                    for tool_call in tool_calls:
-                        function_name = tool_call.function.name
-                        function_to_call = available_functions[function_name]
-                        function_args = json.loads(tool_call.function.arguments)
-                        function_response = function_to_call(
-                            prompt=function_args.get("prompt")
-                        )
-                        response = {
-                            "tool_call_id": tool_call.id,
-                            "role": "tool",
-                            "name": function_name,
-                            "content": function_response,
-                        }
-
-                    # We need to save that response as an assistant
-                    if response:
-                        nextLine = {"role": "assistant", "content": response}
-
-    # We support a blank add_to_session which just uses the mechanics
-    # to retrieve. This is what's done on page-load for a session reload
-    
-    def generate():
+    async def generate():
         ttlResponse = ''
-        for chunk in message_chunks:
+        async for chunk in openrouter_stream(openrouter_model, filter_tools(history), None, None):
             choices = chunk.get("choices", [])
             if choices:
                 delta = choices[0].get("delta", {})
@@ -383,10 +340,10 @@ async def chat(data: dict):
                 if content:
                     ttlResponse += content
 
-                chunk['uid'] = uid
-                chunk['delta'] = content
+            chunk['uid'] = uid
+            chunk['delta'] = content
 
-                yield f"data:{json.dumps(chunk)}\n\n"
+            yield f"data:{json.dumps(chunk)}\n\n"
 
         add_to_session(uid, ttlResponse)
 
