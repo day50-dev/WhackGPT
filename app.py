@@ -306,6 +306,7 @@ async def chat(data: dict):
     # If we don't have a UID, then we initialize and have the first injected assistant.
     isFirst = not data.get("uid")
     uid = data.get("uid") or initialize_session(data["context"], _model)
+    print("back")
     nextLine = None
 
     if data.get("text"):
@@ -335,7 +336,9 @@ async def chat(data: dict):
 
     async def generate():
         ttlResponse = ''
+        print("start")
         async for chunk in openrouter_stream(openrouter_model, filter_tools(history), None, None):
+            print("next")
             choices = chunk.get("choices", [])
             content = ""
             if choices:
