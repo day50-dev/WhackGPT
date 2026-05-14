@@ -21,7 +21,7 @@ ws_redis = ioredis.from_url("redis://localhost")
 rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
-_model = "qwen3.5:9b" #"openrouter/free"
+_model = "huihui_ai/qwen3.5-abliterated:9b"
 #_model = "deepseek/deepseek-chat-v3-0324"
 
 _sd_ip = "10.0.0.251:7860"
@@ -333,15 +333,11 @@ async def chat(data: dict):
 
         async def generate():
             ttlResponse = ''
-            print("gen in")
-            print(history)
             async for chunk in openrouter_stream(openrouter_model, filter_tools(history), None, None):
-                print("choice in")
                 choices = chunk.get("choices", [])
                 content = ""
                 if choices:
                     delta = choices[0].get("delta", {})
-                    print(delta)
                     content = delta.get("content", "") or ""
                     if content:
                         ttlResponse += content
