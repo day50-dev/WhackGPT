@@ -21,13 +21,13 @@ ws_redis = ioredis.from_url("redis://localhost")
 rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
-_model = "openrouter/free"
+_model = "qwen2.5:1.5b" #"openrouter/free"
 #_model = "deepseek/deepseek-chat-v3-0324"
 
 _sd_ip = "10.0.0.251:7860"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+OPENROUTER_API_BASE = "http://10.0.0.251:11434/v1" #"https://openrouter.ai/api/v1"
 
 async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=None):
     """Call OpenRouter API with streaming and yield chunks."""
@@ -308,6 +308,29 @@ async def chat(data: dict):
     uid = data.get("uid") or initialize_session(data["context"], _model)
     print("back")
     nextLine = None
+    #import pdb
+    #pdb.set_trace()
+
+    async def generate():
+        ttlResponse = ''
+        print("start")
+        async for chunk in openrouter_stream(openrouter_model, filter_tools(history), None, None):
+            print("next")
+            choices = chunk.get("choices", [])
+            content = ""
+            if choices:
+                delta = choices[0].get("delta", {})
+                content = delta.get("content", "") or ""
+                if content:
+                    print(content)
+                    ttlResponse += content
+
+            chunk['uid'] = uid
+            chunk['delta'] = content
+            yield f"data:{json.dumps(chunk)}\n\n"
+
+        print(uid)
+        add_to_session(uid, ttlResponse)
 
     if data.get("text"):
         text = data["text"]
@@ -333,25 +356,6 @@ async def chat(data: dict):
             summarize(uid, summary)
 
         openrouter_model = _model
-
-    async def generate():
-        ttlResponse = ''
-        print("start")
-        async for chunk in openrouter_stream(openrouter_model, filter_tools(history), None, None):
-            print("next")
-            choices = chunk.get("choices", [])
-            content = ""
-            if choices:
-                delta = choices[0].get("delta", {})
-                content = delta.get("content", "") or ""
-                if content:
-                    ttlResponse += content
-
-            chunk['uid'] = uid
-            chunk['delta'] = content
-            yield f"data:{json.dumps(chunk)}\n\n"
-
-        add_to_session(uid, ttlResponse)
 
 @app.get("/test-stream")
 async def test_stream():
