@@ -55,7 +55,6 @@ async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=
     print(f"DEBUG: payload = {json.dumps(payload, indent=2)[:1000]}", flush=True)
 
     print("DEBUG: Creating httpx client...", flush=True)
-    breakpoint()
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             print("DEBUG: Starting request to OpenRouter...")
@@ -298,13 +297,21 @@ def image(data: dict):
     }
 
 def filter_tools(ll):
-    # Convert any non-string content to string to avoid malformed messages
     cleaned = []
     for row in ll:
-        row = dict(row)
-        if row.get('content') and not isinstance(row['content'], str):
-            row['content'] = str(row['content'])
-        cleaned.append(row)
+        try:
+            if isinstance(row, dict):
+                row = dict(row)
+            elif isinstance(row, str):
+                row = {"role": "user", "content": row}
+            else:
+                row = {"role": "user", "content": str(row)}
+            if row.get('content') and not isinstance(row['content'], str):
+                row['content'] = str(row['content'])
+            cleaned.append(row)
+        except Exception as e:
+            print(f"DEBUG: filter_tools error: {e}, row={row}")
+            continue
     return cleaned
 
 @app.post("/chat")
