@@ -350,7 +350,15 @@ async def chat(data: dict):
 
         add_to_session(uid, ttlResponse)
 
-    return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
+    @app.get("/test-stream")
+async def test_stream():
+    async def gen():
+        for i in range(5):
+            yield f"data:{{\"delta\": \"chunk {i}\", \"uid\": \"test\"}}\n\n"
+            await asyncio.sleep(0.5)
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+    # return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
 @app.get("/audio/{id}")
 async def get_audio(id: str):
