@@ -350,7 +350,7 @@ async def chat(data: dict):
 
         add_to_session(uid, ttlResponse)
 
-    @app.get("/test-stream")
+@app.get("/test-stream")
 async def test_stream():
     async def gen():
         for i in range(5):
