@@ -31,9 +31,6 @@ OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
 async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=None):
     """Call OpenRouter API with streaming and yield chunks."""
-    print(f"DEBUG: API_KEY set: {bool(OPENROUTER_API_KEY)}", flush=True)
-    print(f"DEBUG: messages = {json.dumps(messages, indent=2)[:1000]}", flush=True)
-
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -52,28 +49,18 @@ async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=
     if tool_choice:
         payload["tool_choice"] = tool_choice
 
-    print(f"DEBUG: payload = {json.dumps(payload, indent=2)[:1000]}", flush=True)
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async with client.stream("POST", f"{OPENROUTER_API_BASE}/chat/completions", json=payload, headers=headers) as response:
+            if response.status_code != 200:
+                text = await response.aread()
+                raise Exception(f"OpenRouter error {response.status_code}: {text}")
 
-    print("DEBUG: Creating httpx client...", flush=True)
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            print("DEBUG: Starting request to OpenRouter...")
-            async with client.stream("POST", f"{OPENROUTER_API_BASE}/chat/completions", json=payload, headers=headers) as response:
-                print(f"DEBUG: Response status: {response.status_code}")
-                if response.status_code != 200:
-                    text = await response.aread()
-                    raise Exception(f"OpenRouter error {response.status_code}: {text}")
-
-                async for line in response.aiter_lines():
-                    print(f"DEBUG line: {line[:200]}")
-                    if line.startswith("data: "):
-                        data = line[6:]
-                        if data == "[DONE]":
-                            break
-                        yield json.loads(data)
-    except Exception as e:
-        print(f"DEBUG: Exception in openrouter_stream: {e}")
-        raise
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    yield json.loads(data)
 
 _tools =  [{
     "type": "function",
@@ -350,21 +337,20 @@ async def chat(data: dict):
         ttlResponse = ''
         async for chunk in openrouter_stream(openrouter_model, filter_tools(history), None, None):
             choices = chunk.get("choices", [])
+            content = ""
             if choices:
                 delta = choices[0].get("delta", {})
                 content = delta.get("content", "") or ""
-
                 if content:
                     ttlResponse += content
 
             chunk['uid'] = uid
             chunk['delta'] = content
-
             yield f"data:{json.dumps(chunk)}\n\n"
 
         add_to_session(uid, ttlResponse)
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
 @app.get("/audio/{id}")
 async def get_audio(id: str):
