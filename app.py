@@ -21,7 +21,7 @@ ws_redis = ioredis.from_url("redis://localhost")
 rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
-_model = "google/gemini-2.0-flash-exp:free"
+_model = "openrouter/free"
 #_model = "deepseek/deepseek-chat-v3-0324"
 
 _sd_ip = "10.0.0.251:7860"
@@ -31,7 +31,8 @@ OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
 async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=None):
     """Call OpenRouter API with streaming and yield chunks."""
-    print(f"DEBUG: messages = {json.dumps(messages, indent=2)[:1000]}")
+    print(f"DEBUG: API_KEY set: {bool(OPENROUTER_API_KEY)}", flush=True)
+    print(f"DEBUG: messages = {json.dumps(messages, indent=2)[:1000]}", flush=True)
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -51,20 +52,29 @@ async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=
     if tool_choice:
         payload["tool_choice"] = tool_choice
 
-    print(f"DEBUG: payload = {json.dumps(payload, indent=2)[:1000]}")
+    print(f"DEBUG: payload = {json.dumps(payload, indent=2)[:1000]}", flush=True)
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        async with client.stream("POST", f"{OPENROUTER_API_BASE}/chat/completions", json=payload, headers=headers) as response:
-            if response.status_code != 200:
-                text = await response.aread()
-                raise Exception(f"OpenRouter error {response.status_code}: {text}")
+    print("DEBUG: Creating httpx client...", flush=True)
+    breakpoint()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            print("DEBUG: Starting request to OpenRouter...")
+            async with client.stream("POST", f"{OPENROUTER_API_BASE}/chat/completions", json=payload, headers=headers) as response:
+                print(f"DEBUG: Response status: {response.status_code}")
+                if response.status_code != 200:
+                    text = await response.aread()
+                    raise Exception(f"OpenRouter error {response.status_code}: {text}")
 
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
-                    yield json.loads(data)
+                async for line in response.aiter_lines():
+                    print(f"DEBUG line: {line[:200]}")
+                    if line.startswith("data: "):
+                        data = line[6:]
+                        if data == "[DONE]":
+                            break
+                        yield json.loads(data)
+    except Exception as e:
+        print(f"DEBUG: Exception in openrouter_stream: {e}")
+        raise
 
 _tools =  [{
     "type": "function",
