@@ -303,34 +303,9 @@ def filter_tools(ll):
 
 @app.post("/chat")
 async def chat(data: dict):
-    # If we don't have a UID, then we initialize and have the first injected assistant.
     isFirst = not data.get("uid")
     uid = data.get("uid") or initialize_session(data["context"], _model)
-    print("back")
     nextLine = None
-    #import pdb
-    #pdb.set_trace()
-
-    async def generate():
-        ttlResponse = ''
-        print("start")
-        async for chunk in openrouter_stream(openrouter_model, filter_tools(history), None, None):
-            print("next")
-            choices = chunk.get("choices", [])
-            content = ""
-            if choices:
-                delta = choices[0].get("delta", {})
-                content = delta.get("content", "") or ""
-                if content:
-                    print(content)
-                    ttlResponse += content
-
-            chunk['uid'] = uid
-            chunk['delta'] = content
-            yield f"data:{json.dumps(chunk)}\n\n"
-
-        print(uid)
-        add_to_session(uid, ttlResponse)
 
     if data.get("text"):
         text = data["text"]
@@ -349,7 +324,6 @@ async def chat(data: dict):
 
             return JSONResponse({"res": True, "data": [], "uid": uid})
 
-        # We should also have the first user-generated text at this point
         history = add_to_session(uid, {"role": "user", "content": data["text"]})
         if isFirst:
             summary = generate_summary(data["text"])
@@ -357,15 +331,24 @@ async def chat(data: dict):
 
         openrouter_model = _model
 
-@app.get("/test-stream")
-async def test_stream():
-    async def gen():
-        for i in range(5):
-            yield f"data:{{\"delta\": \"chunk {i}\", \"uid\": \"test\"}}\n\n"
-            await asyncio.sleep(0.5)
-    return StreamingResponse(gen(), media_type="text/event-stream")
+        async def generate():
+            ttlResponse = ''
+            async for chunk in openrouter_stream(openrouter_model, filter_tools(history), None, None):
+                choices = chunk.get("choices", [])
+                content = ""
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    content = delta.get("content", "") or ""
+                    if content:
+                        ttlResponse += content
 
-    # return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
+                chunk['uid'] = uid
+                chunk['delta'] = content
+                yield f"data:{json.dumps(chunk)}\n\n"
+
+            add_to_session(uid, ttlResponse)
+
+        return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
 @app.get("/audio/{id}")
 async def get_audio(id: str):
