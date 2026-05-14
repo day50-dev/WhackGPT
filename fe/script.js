@@ -378,9 +378,10 @@ async function sendMessage() {
       const lines = buffer.split('\n');
       buffer = lines.pop();  // Keep incomplete line
 
+
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const dataStr = line.slice(6);
+        if (line.startsWith('data:')) {
+          const dataStr = line.slice(5);
           if (dataStr === '[DONE]') {
             // End stream
             contentEl.innerHTML = format(partialContent);
@@ -388,8 +389,13 @@ async function sendMessage() {
           }
           try {
             const eventData = JSON.parse(dataStr);
+            console.log(eventData);
+
             if (eventData.delta) {
               partialContent += eventData.delta;
+              contentEl.innerHTML = format(partialContent);  // Live update (or append to markdown)
+            } else if( eventData.choices[0].delta.reasoning) {
+              partialContent += eventData.choices[0].delta.reasoning;
               contentEl.innerHTML = format(partialContent);  // Live update (or append to markdown)
             }
             if (eventData.uid && !_uid) {
