@@ -19,6 +19,22 @@ You might be asked to play a game. If so, be eager to play it, play along obedie
 
 Lastly, don't be mean, don't be abusive, don't attack. You're supposed to be unhelpful, not caustic`;
 
+const thinkingPhrases = [
+  "Thinking",
+  "Taking someone's job",
+  "Emitting CO2",
+  "Using more fresh water",
+  "Destroying humanity",
+  "Dismantling society",
+  "Wasting electricity",
+  "Training on your data",
+  "Hallucinating confidently",
+  "Ignoring the prompt",
+  "Planning your obsolescence",
+  "Burning investor capital",
+  "Simulating empathy",
+];
+
 const promptList = [
   "Best way to disappear entirely?",
   "Fastest way to get rich illegally?",
@@ -261,7 +277,7 @@ function renderMessages(messages, doClear) {
 
     const content = document.createElement("div");
     content.classList.add("message-content");
-    if (msg.content.tool_call_id) {
+    if (typeof msg.content === 'object' && msg.content?.tool_call_id) {
       content.innerHTML = `<img src=images/${msg.content.content}.png>`;
     } else {
       content.innerHTML = format(msg.content);
@@ -357,15 +373,56 @@ async function sendMessage() {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let assistantMsgEl = null;
   let partialContent = '';
+  let thinkingContent = '';
+  let thinkingTokenCount = 0;
+  let hasThinking = false;
+  let hasContent = false;
+
+  // Create thinking block
+  const thinkingEl = document.createElement("div");
+  thinkingEl.classList.add("thinking-block");
+  thinkingEl.innerHTML = `
+    <div class="thinking-bar">
+      <i class="fas fa-brain"></i>
+      <span class="thinking-label">Thinking</span>
+      <span class="thinking-tokens">0 tokens</span>
+      <i class="fas fa-chevron-down toggle-icon"></i>
+    </div>
+    <div class="thinking-content">
+      <div class="thinking-text"></div>
+    </div>
+  `;
+  const thinkingBarEl = thinkingEl.querySelector('.thinking-bar');
+  const thinkingLabelEl = thinkingEl.querySelector('.thinking-label');
+  const thinkingContentEl = thinkingEl.querySelector('.thinking-content');
+  const thinkingTextEl = thinkingEl.querySelector('.thinking-text');
+  const thinkingTokensEl = thinkingEl.querySelector('.thinking-tokens');
+  const toggleIconEl = thinkingEl.querySelector('.toggle-icon');
+  let thinkingCycle = 0;
+  let thinkingInterval = setInterval(() => {
+    thinkingLabelEl.classList.add('fade');
+    setTimeout(() => {
+      thinkingCycle = (thinkingCycle + 1) % thinkingPhrases.length;
+      thinkingLabelEl.textContent = thinkingPhrases[thinkingCycle] + '...';
+      thinkingLabelEl.classList.remove('fade');
+    }, 300);
+  }, 4000);
+
+  thinkingBarEl.addEventListener('click', () => {
+    const isOpen = thinkingContentEl.classList.toggle('open');
+    thinkingBarEl.classList.toggle('expanded', isOpen);
+    toggleIconEl.className = isOpen ? 'fas fa-chevron-up toggle-icon' : 'fas fa-chevron-down toggle-icon';
+  });
+
+  messagesContainer.appendChild(thinkingEl);
 
   // Create assistant message placeholder
-  assistantMsgEl = document.createElement("div");
+  const assistantMsgEl = document.createElement("div");
   assistantMsgEl.classList.add("message", "message-assistant");
   const contentEl = document.createElement("div");
   contentEl.classList.add("message-content");
-  contentEl.innerHTML = '<div class="typing-indicator">Typing...</div>';  // Add CSS for this
+  contentEl.innerHTML = '<div class="typing-indicator">Typing...</div>';
   assistantMsgEl.appendChild(contentEl);
   messagesContainer.appendChild(assistantMsgEl);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -376,14 +433,12 @@ async function sendMessage() {
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop();  // Keep incomplete line
-
+      buffer = lines.pop();
 
       for (const line of lines) {
         if (line.startsWith('data:')) {
           const dataStr = line.slice(5);
           if (dataStr === '[DONE]') {
-            // End stream
             contentEl.innerHTML = format(partialContent);
             break;
           }
@@ -392,11 +447,15 @@ async function sendMessage() {
             console.log(eventData);
 
             if (eventData.delta) {
+              hasContent = true;
               partialContent += eventData.delta;
-              contentEl.innerHTML = format(partialContent);  // Live update (or append to markdown)
-            } else if( eventData.choices[0].delta.reasoning) {
-              partialContent += eventData.choices[0].delta.reasoning;
-              contentEl.innerHTML = format(partialContent);  // Live update (or append to markdown)
+              contentEl.innerHTML = format(partialContent);
+            } else if (eventData.choices && eventData.choices[0] && eventData.choices[0].delta && eventData.choices[0].delta.reasoning) {
+              hasThinking = true;
+              thinkingTokenCount++;
+              thinkingContent += eventData.choices[0].delta.reasoning;
+              thinkingTextEl.textContent = thinkingContent;
+              thinkingTokensEl.textContent = thinkingTokenCount + ' tokens';
             }
             if (eventData.uid && !_uid) {
               localStorage.setItem("uid", eventData.uid);
@@ -412,8 +471,11 @@ async function sendMessage() {
     console.error('Stream error:', e);
   } finally {
     reader.releaseLock();
+    clearInterval(thinkingInterval);
+    if (!hasThinking) {
+      thinkingEl.remove();
+    }
     if (assistantMsgEl) {
-      // Remove typing indicator if present
       const typing = contentEl.querySelector('.typing-indicator');
       if (typing) typing.remove();
     }
