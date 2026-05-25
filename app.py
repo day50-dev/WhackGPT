@@ -10,7 +10,7 @@ import numpy as np
 import httpx
 from redis.asyncio import Redis as ioredis
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 DEFAULT_DSM_TTS_VOICE_REPO = "kyutai/tts-voices"
@@ -353,9 +353,13 @@ async def chat(data: dict):
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
-@app.get("/audio/{id}")
-async def get_audio(id: str):
-    pass
+@app.post("/speak")
+async def speak(data: dict):
+    import os
+    path = "fe/voice.mp3"
+    if os.path.exists(path):
+        return Response(content=open(path, "rb").read(), media_type="audio/mpeg")
+    return Response(content=b"", media_type="audio/mpeg")
 
 @app.get("/history/{id}")
 async def get_history(id: str):

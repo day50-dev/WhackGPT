@@ -294,6 +294,35 @@ function renderMessages(messages, doClear) {
       messageEl.appendChild(regenBtn);
     }
 
+    if (msg.role === 'assistant' && typeof msg.content === 'string') {
+      const speakBtn = document.createElement('button');
+      speakBtn.className = 'speak-btn';
+      speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+      speakBtn.title = 'Read aloud';
+      speakBtn.addEventListener('click', async () => {
+        speakBtn.disabled = true;
+        speakBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        try {
+          const res = await fetch('/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: msg.content }),
+          });
+          const blob = await res.blob();
+          const audio = new Audio(URL.createObjectURL(blob));
+          audio.onended = () => {
+            speakBtn.disabled = false;
+            speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+          };
+          audio.play();
+        } catch {
+          speakBtn.disabled = false;
+          speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+        }
+      });
+      messageEl.appendChild(speakBtn);
+    }
+
     messagesContainer.appendChild(messageEl);
   });
 
@@ -502,11 +531,37 @@ async function sendMessage(regenText, isRegen) {
       if (typing) typing.remove();
     }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    maybeShowSurvey();
   }
 }
 
 function format(text) {
   return marked.parse(text);
+}
+
+const surveyOverlay = document.getElementById('surveyOverlay');
+const surveyButtons = document.getElementById('surveyButtons');
+const surveyThanks = document.getElementById('surveyThanks');
+const labels = ['Very', 'Highly', 'Utterly', 'Profoundly', 'Intensely'];
+
+surveyButtons.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const rating = btn.dataset.rating;
+  surveyButtons.style.display = 'none';
+  surveyThanks.textContent = `Thank you! Your feedback of "${labels[rating - 1]}" has been submitted.`;
+  surveyThanks.classList.add('show');
+  setTimeout(() => {
+    surveyOverlay.classList.remove('open');
+    surveyButtons.style.display = '';
+    surveyThanks.classList.remove('show');
+    surveyThanks.textContent = '';
+  }, 2000);
+});
+
+function maybeShowSurvey() {
+  if (Math.random() > 0.25) return;
+  surveyOverlay.classList.add('open');
 }
 
 const searchInput = document.getElementById('searchInput');

@@ -478,6 +478,31 @@ textarea {
   color: var(--primary);
 }
 
+.speak-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.25rem;
+  font-size: 0.85rem;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s;
+  align-self: flex-end;
+}
+
+.message-assistant:hover .speak-btn {
+  opacity: 0.6;
+}
+
+.message-assistant .speak-btn:hover {
+  opacity: 1;
+  color: var(--primary);
+}
+
+.speak-btn:disabled {
+  cursor: default;
+}
+
 /* Loading indicator */
 .typing-indicator {
   display: flex;
@@ -582,6 +607,76 @@ textarea {
 
 .thinking-text {
   font-family: monospace;
+}
+
+.survey-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 2000;
+  align-items: center;
+  justify-content: center;
+}
+
+.survey-overlay.open {
+  display: flex;
+}
+
+.survey-modal {
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 2rem;
+  max-width: 420px;
+  width: 90%;
+  text-align: center;
+}
+
+.survey-question {
+  font-size: 1.1rem;
+  margin-bottom: 1.5rem;
+  line-height: 1.4;
+}
+
+.survey-buttons {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.survey-buttons button {
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 0.75rem 0.5rem;
+  flex: 1;
+  font-size: 1rem;
+  line-height: 1.2;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.survey-buttons button:hover {
+  border-color: var(--primary);
+  background: var(--slightly-lighter);
+}
+
+.survey-buttons button small {
+  font-size: 0.65rem;
+  opacity: 0.7;
+}
+
+.survey-thanks {
+  font-size: 1rem;
+  color: var(--primary);
+  margin-top: 1rem;
+  display: none;
+}
+
+.survey-thanks.show {
+  display: block;
 }
 
 .hamburger-menu {
