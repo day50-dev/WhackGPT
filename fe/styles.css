@@ -247,6 +247,9 @@ table {
 
 .message.message-user {
   width: auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
 }
 .message-user .message-content {
   background-color: var(--slightly-lighter);
@@ -395,6 +398,27 @@ textarea {
 
 #closeSettings:hover {
   background-color: #2a2b32;
+}
+
+.regen-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.25rem;
+  font-size: 0.85rem;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s;
+  align-self: flex-end;
+}
+
+.message-user:hover .regen-btn {
+  opacity: 0.6;
+}
+
+.message-user .regen-btn:hover {
+  opacity: 1;
+  color: var(--primary);
 }
 
 /* Loading indicator */

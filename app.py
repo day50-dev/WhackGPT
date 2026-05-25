@@ -324,7 +324,10 @@ async def chat(data: dict):
 
             return JSONResponse({"res": True, "data": [], "uid": uid})
 
-        history = add_to_session(uid, {"role": "user", "content": data["text"]})
+        if not data.get("regen"):
+            history = add_to_session(uid, {"role": "user", "content": data["text"]})
+        else:
+            history = add_to_session(uid)
         if isFirst:
             summary = generate_summary(data["text"])
             summarize(uid, summary)

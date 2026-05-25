@@ -283,6 +283,16 @@ function renderMessages(messages, doClear) {
       content.innerHTML = format(msg.content);
     }
     messageEl.appendChild(content);
+
+    if (msg.role === 'user') {
+      const regenBtn = document.createElement('button');
+      regenBtn.className = 'regen-btn';
+      regenBtn.innerHTML = '<i class="fas fa-dice"></i>';
+      regenBtn.title = 'Regenerate response';
+      regenBtn.addEventListener('click', () => sendMessage(msg.content, true));
+      messageEl.appendChild(regenBtn);
+    }
+
     messagesContainer.appendChild(messageEl);
   });
 
@@ -337,13 +347,16 @@ function set_context(what) {
   };
 }
 
-async function sendMessage() {
-  const text = messageInput.value.trim();
+async function sendMessage(regenText, isRegen) {
+  const text = regenText !== undefined ? regenText : messageInput.value.trim();
 
-  messageInput.value = "";
-  messageInput.style.height = "auto";
+  if (regenText === undefined) {
+    messageInput.value = "";
+    messageInput.style.height = "auto";
+  }
 
   let body = { uid: _uid, text };
+  if (isRegen) body.regen = true;
   if (!_uid) {
     body.context = systemprompt;
   } else if (!text) {
@@ -452,6 +465,8 @@ async function sendMessage() {
               contentEl.innerHTML = format(partialContent);
             } else if (eventData.choices && eventData.choices[0] && eventData.choices[0].delta && eventData.choices[0].delta.reasoning) {
               hasThinking = true;
+              const typing = contentEl.querySelector('.typing-indicator');
+              if (typing) typing.remove();
               thinkingTokenCount++;
               thinkingContent += eventData.choices[0].delta.reasoning;
               thinkingTextEl.textContent = thinkingContent;
