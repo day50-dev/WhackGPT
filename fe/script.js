@@ -1,5 +1,6 @@
 var _uid = window.location.hash.slice(1) || localStorage.getItem("uid"),
-  topicMap = {};
+  topicMap = {},
+  _skipNextAssistant = false;
 const newChatBtn = document.getElementById("newChatBtn");
 const topicList = document.getElementById("topicList");
 const messagesContainer = document.getElementById("messagesContainer");
@@ -341,9 +342,13 @@ function set_context(what) {
   }
   ws_current = _ws("channel/" + _uid);
   ws_current.onmessage = (event) => {
-    const message = event.data;
+    const message = JSON.parse(event.data);
+    if (message.role === 'assistant' && _skipNextAssistant) {
+      _skipNextAssistant = false;
+      return;
+    }
     console.log("Received:", message);
-    renderMessages([JSON.parse(message)]);
+    renderMessages([message]);
   };
 }
 
@@ -487,6 +492,8 @@ async function sendMessage(regenText, isRegen) {
   } finally {
     reader.releaseLock();
     clearInterval(thinkingInterval);
+    _skipNextAssistant = true;
+    setTimeout(() => { _skipNextAssistant = false; }, 2000);
     if (!hasThinking) {
       thinkingEl.remove();
     }
