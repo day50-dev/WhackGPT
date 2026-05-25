@@ -501,12 +501,44 @@ async function sendMessage(regenText, isRegen) {
       const typing = contentEl.querySelector('.typing-indicator');
       if (typing) typing.remove();
     }
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 }
 
 function format(text) {
   return marked.parse(text);
 }
+
+const searchInput = document.getElementById('searchInput');
+const searchResults = document.getElementById('searchResults');
+
+searchInput.addEventListener('input', async () => {
+  const query = searchInput.value.trim();
+  searchResults.innerHTML = '';
+
+  if (!query) return;
+
+  let re;
+  try { re = new RegExp(query, 'i'); } catch { return; }
+
+  const response = await fetch('/topicList');
+  const data = await response.json();
+  const channels = Object.entries(data.data.channels);
+
+  for (const [id, title] of channels) {
+    if (re.test(title)) {
+      const item = document.createElement('div');
+      item.className = 'search-result-item';
+      item.textContent = title;
+      item.addEventListener('click', () => {
+        loadChat(id);
+        searchInput.value = '';
+        searchResults.innerHTML = '';
+      });
+      searchResults.appendChild(item);
+    }
+  }
+});
 
 const hamburgerMenu = document.querySelector(".hamburger-menu");
 const sidebar = document.querySelector(".sidebar");
