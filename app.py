@@ -21,18 +21,16 @@ ws_redis = ioredis.from_url("redis://localhost")
 rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
-_model = "huihui_ai/qwen3.5-abliterated:9b"
+_model = "ablit"
 #_model = "deepseek/deepseek-chat-v3-0324"
 
-_sd_ip = "10.0.0.251:7860"
+_sd_ip = "127.0.0.1:11434"
 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-OPENROUTER_API_BASE = "http://10.0.0.251:11434/v1" #"https://openrouter.ai/api/v1"
+OPENROUTER_API_BASE = "http://127.0.0.1:11434"
 
 async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=None):
     """Call OpenRouter API with streaming and yield chunks."""
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "http://localhost",
         "X-Title": "WhackGPT"

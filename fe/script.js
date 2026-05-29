@@ -1,6 +1,6 @@
 var _uid = window.location.hash.slice(1) || localStorage.getItem("uid"),
   topicMap = {},
-  _skipNextAssistant = false;
+  _lastStreamedContent = null;
 const newChatBtn = document.getElementById("newChatBtn");
 const topicList = document.getElementById("topicList");
 const messagesContainer = document.getElementById("messagesContainer");
@@ -254,7 +254,8 @@ function clearMessages() {
     div.addEventListener("click", () => {
       const myprompt = prompt;
       messageInput.value = myprompt;
-      autoResizeTextarea();
+      messageInput.style.height = "auto";
+      messageInput.style.height = messageInput.scrollHeight + "px";
       messageInput.focus();
     });
     div.className = "pill";
@@ -372,8 +373,8 @@ function set_context(what) {
   ws_current = _ws("channel/" + _uid);
   ws_current.onmessage = (event) => {
     const message = JSON.parse(event.data);
-    if (message.role === 'assistant' && _skipNextAssistant) {
-      _skipNextAssistant = false;
+    if (message.role === 'assistant' && _lastStreamedContent && message.content === _lastStreamedContent) {
+      _lastStreamedContent = null;
       return;
     }
     console.log("Received:", message);
@@ -521,8 +522,7 @@ async function sendMessage(regenText, isRegen) {
   } finally {
     reader.releaseLock();
     clearInterval(thinkingInterval);
-    _skipNextAssistant = true;
-    setTimeout(() => { _skipNextAssistant = false; }, 2000);
+    _lastStreamedContent = partialContent;
     if (!hasThinking) {
       thinkingEl.remove();
     }
@@ -559,8 +559,11 @@ surveyButtons.addEventListener('click', (e) => {
   }, 2000);
 });
 
+let _surveyCount = 0;
+
 function maybeShowSurvey() {
-  if (Math.random() > 0.25) return;
+  _surveyCount++;
+  if (_surveyCount !== 4) return;
   surveyOverlay.classList.add('open');
 }
 
