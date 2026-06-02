@@ -549,7 +549,7 @@ surveyButtons.addEventListener('click', (e) => {
   if (!btn) return;
   const rating = btn.dataset.rating;
   surveyButtons.style.display = 'none';
-  surveyThanks.textContent = `Thank you! Your feedback of "${labels[rating - 1]}" has been submitted.`;
+  surveyThanks.textContent = `Thank you! Your feedback of "${labels[rating - 1]} satisfied" has been submitted.`;
   surveyThanks.classList.add('show');
   setTimeout(() => {
     surveyOverlay.classList.remove('open');
@@ -563,7 +563,7 @@ let _surveyCount = 0;
 
 function maybeShowSurvey() {
   _surveyCount++;
-  if (_surveyCount !== 4) return;
+  if (_surveyCount !== 2) return;
   surveyOverlay.classList.add('open');
 }
 

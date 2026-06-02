@@ -22,19 +22,14 @@ rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
 _model = "ablit"
-#_model = "deepseek/deepseek-chat-v3-0324"
 
 _sd_ip = "127.0.0.1:11434"
 
-OPENROUTER_API_BASE = "http://127.0.0.1:11434"
+DYVA_API_BASE = "http://127.0.0.1:11434/v1"
 
 async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=None):
-    """Call OpenRouter API with streaming and yield chunks."""
-    headers = {
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost",
-        "X-Title": "WhackGPT"
-    }
+    """Call Dyva with streaming and yield chunks."""
+    headers = { "Content-Type": "application/json", }
 
     payload = {
         "model": model,
@@ -48,7 +43,7 @@ async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=
         payload["tool_choice"] = tool_choice
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        async with client.stream("POST", f"{OPENROUTER_API_BASE}/chat/completions", json=payload, headers=headers) as response:
+        async with client.stream("POST", f"{DYVA_API_BASE}/chat/completions", json=payload, headers=headers) as response:
             if response.status_code != 200:
                 text = await response.aread()
                 raise Exception(f"OpenRouter error {response.status_code}: {text}")
@@ -99,13 +94,13 @@ def generate_summary(text, max_length=30):
     try:
         import httpx
         headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Authorization": f"Bearer {DYVA_API_KEY}",
             "Content-Type": "application/json",
             "HTTP-Referer": "http://localhost",
             "X-Title": "WhackGPT"
         }
         payload = {"model": _model, "messages": messages}
-        response = httpx.post(f"{OPENROUTER_API_BASE}/chat/completions", json=payload, headers=headers, timeout=30.0)
+        response = httpx.post(f"{DYVA_API_BASE}/chat/completions", json=payload, headers=headers, timeout=30.0)
         result = response.json()
         subject = result["choices"][0]["message"]["content"]
         subject = re.sub(r'\s*\([^)]*\)', '', subject)
