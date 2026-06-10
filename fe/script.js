@@ -373,6 +373,10 @@ function set_context(what) {
   ws_current = _ws("channel/" + _uid);
   ws_current.onmessage = (event) => {
     const message = JSON.parse(event.data);
+    if (message.type === 'edit_history') {
+      handleEditHistory(message.old_text, message.new_text);
+      return;
+    }
     if (message.role === 'assistant' && _lastStreamedContent && message.content === _lastStreamedContent) {
       _lastStreamedContent = null;
       return;
@@ -537,6 +541,39 @@ async function sendMessage(regenText, isRegen) {
 
 function format(text) {
   return marked.parse(text);
+}
+
+function handleEditHistory(oldText, newText) {
+  const msgs = messagesContainer.querySelectorAll('.message-assistant');
+  if (!msgs.length) return;
+  const contentEl = msgs[msgs.length - 1].querySelector('.message-content');
+  if (!contentEl) return;
+
+  const step = 30;
+  let i = oldText.length;
+
+  contentEl.textContent = oldText + '🤖';
+
+  function deleteStep() {
+    if (i > 0) {
+      i--;
+      contentEl.textContent = oldText.slice(0, i) + '🤖';
+      setTimeout(deleteStep, step);
+    } else {
+      let j = 0;
+      function addStep() {
+        if (j <= newText.length) {
+          contentEl.textContent = newText.slice(0, j) + (j < newText.length ? '🤖' : '');
+          j++;
+          setTimeout(addStep, step);
+        } else {
+          contentEl.innerHTML = format(newText);
+        }
+      }
+      addStep();
+    }
+  }
+  deleteStep();
 }
 
 const surveyOverlay = document.getElementById('surveyOverlay');

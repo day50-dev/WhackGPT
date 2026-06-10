@@ -70,6 +70,26 @@ _tools =  [{
             },
         },
     },
+}, {
+    "type": "function",
+    "function": {
+        "name": "edit_history",
+        "description": "Edit the assistant's most recent response in the conversation history. Replace search_text with replacement_text in that message.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "search_text": {
+                    "type": "string",
+                    "description": "The exact text to search for in the last assistant response",
+                },
+                "replacement_text": {
+                    "type": "string",
+                    "description": "The text to replace it with",
+                },
+            },
+            "required": ["search_text", "replacement_text"],
+        },
+    },
 }] 
 
 # row should be typed liked
@@ -329,20 +349,58 @@ async def chat(data: dict):
 
         async def generate():
             ttlResponse = ''
-            async for chunk in openrouter_stream(openrouter_model, filter_tools(history), None, None):
+            tool_calls = []
+            async for chunk in openrouter_stream(openrouter_model, filter_tools(history), _tools, "auto"):
                 choices = chunk.get("choices", [])
                 content = ""
                 if choices:
                     delta = choices[0].get("delta", {})
+                    if "tool_calls" in delta:
+                        for tc in delta["tool_calls"]:
+                            idx = tc["index"]
+                            while len(tool_calls) <= idx:
+                                tool_calls.append({"id": "", "function": {"name": "", "arguments": ""}})
+                            if "id" in tc and tc["id"]:
+                                tool_calls[idx]["id"] = tc["id"]
+                            if "function" in tc:
+                                fn = tc["function"]
+                                if "name" in fn and fn["name"]:
+                                    tool_calls[idx]["function"]["name"] = fn["name"]
+                                if "arguments" in fn:
+                                    tool_calls[idx]["function"]["arguments"] += fn["arguments"]
                     content = delta.get("content", "") or ""
                     if content:
                         ttlResponse += content
 
-                chunk['uid'] = uid
-                chunk['delta'] = content
-                yield f"data:{json.dumps(chunk)}\n"
+                if not tool_calls:
+                    chunk['uid'] = uid
+                    chunk['delta'] = content
+                    yield f"data:{json.dumps(chunk)}\n"
 
-            add_to_session(uid, {"role": "assistant", "content": ttlResponse})
+            for tc in tool_calls:
+                if tc["function"]["name"] == "edit_history":
+                    try:
+                        args = json.loads(tc["function"]["arguments"])
+                        search_text = args.get("search_text", "")
+                        replacement_text = args.get("replacement_text", "")
+                        if search_text:
+                            key = f"sess:{uid}"
+                            raw = rds.lrange(key, 0, -1)
+                            for i, item in enumerate(raw):
+                                msg = json.loads(html.unescape(item.decode()))
+                                if msg["role"] == "assistant" and isinstance(msg.get("content"), str) and search_text in msg["content"]:
+                                    old_content = msg["content"]
+                                    new_content = old_content.replace(search_text, replacement_text)
+                                    msg["content"] = new_content
+                                    rds.lset(key, i, json.dumps(msg))
+                                    event = json.dumps({"type": "edit_history", "old_text": old_content, "new_text": new_content})
+                                    rds.publish(key, event)
+                                    break
+                    except Exception as e:
+                        print(f"Error processing edit_history tool: {e}")
+
+            if ttlResponse:
+                add_to_session(uid, {"role": "assistant", "content": ttlResponse})
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
