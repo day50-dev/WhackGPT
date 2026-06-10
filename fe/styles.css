@@ -457,7 +457,15 @@ textarea {
   background-color: #2a2b32;
 }
 
-.regen-btn {
+.user-btn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  align-self: flex-end;
+}
+
+.regen-btn,
+.edit-btn {
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -469,11 +477,13 @@ textarea {
   align-self: flex-end;
 }
 
-.message-user:hover .regen-btn {
+.message-user:hover .regen-btn,
+.message-user:hover .edit-btn {
   opacity: 0.6;
 }
 
-.message-user .regen-btn:hover {
+.message-user .regen-btn:hover,
+.message-user .edit-btn:hover {
   opacity: 1;
   color: var(--primary);
 }

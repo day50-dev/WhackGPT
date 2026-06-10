@@ -287,12 +287,29 @@ function renderMessages(messages, doClear) {
     messageEl.appendChild(content);
 
     if (msg.role === 'user') {
+      const btnGroup = document.createElement('div');
+      btnGroup.className = 'user-btn-group';
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'edit-btn';
+      editBtn.innerHTML = '<i class="fas fa-pencil"></i>';
+      editBtn.title = 'Edit message';
+      editBtn.addEventListener('click', () => {
+        messageInput.value = msg.content;
+        messageInput.style.height = 'auto';
+        messageInput.style.height = messageInput.scrollHeight + 'px';
+        messageInput.focus();
+      });
+      btnGroup.appendChild(editBtn);
+
       const regenBtn = document.createElement('button');
       regenBtn.className = 'regen-btn';
       regenBtn.innerHTML = '<i class="fas fa-dice"></i>';
       regenBtn.title = 'Regenerate response';
       regenBtn.addEventListener('click', () => sendMessage(msg.content, true));
-      messageEl.appendChild(regenBtn);
+      btnGroup.appendChild(regenBtn);
+
+      messageEl.appendChild(btnGroup);
     }
 
     if (msg.role === 'assistant' && typeof msg.content === 'string') {
