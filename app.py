@@ -337,7 +337,20 @@ async def chat(data: dict):
 
             return JSONResponse({"res": True, "data": [], "uid": uid})
 
-        if not data.get("regen"):
+        if data.get("edit"):
+            key = f"sess:{uid}"
+            raw = rds.lrange(key, 0, -1)
+            original_text = data.get("original_text", "")
+            for i, item in enumerate(raw):
+                msg = json.loads(html.unescape(item.decode()))
+                if msg["role"] == "user" and (not original_text or msg["content"] == original_text):
+                    msg["content"] = data["text"]
+                    rds.lset(key, i, json.dumps(msg))
+                    if i > 0:
+                        rds.ltrim(key, i, -1)
+                    break
+            history = add_to_session(uid)
+        elif not data.get("regen"):
             history = add_to_session(uid, {"role": "user", "content": data["text"]})
         else:
             history = add_to_session(uid)
@@ -372,10 +385,9 @@ async def chat(data: dict):
                     if content:
                         ttlResponse += content
 
-                if not tool_calls:
-                    chunk['uid'] = uid
-                    chunk['delta'] = content
-                    yield f"data:{json.dumps(chunk)}\n"
+                chunk['uid'] = uid
+                chunk['delta'] = content
+                yield f"data:{json.dumps(chunk)}\n"
 
             for tc in tool_calls:
                 if tc["function"]["name"] == "edit_history":

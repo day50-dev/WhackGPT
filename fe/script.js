@@ -1,6 +1,13 @@
 var _uid = window.location.hash.slice(1) || localStorage.getItem("uid"),
   topicMap = {},
   _lastStreamedContent = null;
+
+function snackbar(msg) {
+  const el = document.getElementById('snackbar');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 5000);
+}
 const newChatBtn = document.getElementById("newChatBtn");
 const topicList = document.getElementById("topicList");
 const messagesContainer = document.getElementById("messagesContainer");
@@ -295,10 +302,35 @@ function renderMessages(messages, doClear) {
       editBtn.innerHTML = '<i class="fas fa-pencil"></i>';
       editBtn.title = 'Edit message';
       editBtn.addEventListener('click', () => {
-        messageInput.value = msg.content;
-        messageInput.style.height = 'auto';
-        messageInput.style.height = messageInput.scrollHeight + 'px';
-        messageInput.focus();
+        const contentEl = messageEl.querySelector('.message-content');
+        const textarea = document.createElement('textarea');
+        textarea.className = 'edit-textarea';
+        textarea.value = msg.content;
+        contentEl.innerHTML = '';
+        contentEl.appendChild(textarea);
+
+        const updateBtn = document.createElement('button');
+        updateBtn.className = 'update-btn';
+        updateBtn.textContent = 'Update';
+        contentEl.appendChild(updateBtn);
+
+        textarea.focus();
+        textarea.style.height = 'auto';
+        textarea.style.height = textarea.scrollHeight + 'px';
+        textarea.addEventListener('input', () => {
+          textarea.style.height = 'auto';
+          textarea.style.height = textarea.scrollHeight + 'px';
+        });
+
+        updateBtn.addEventListener('click', async () => {
+          const newText = textarea.value;
+          const assistants = messagesContainer.querySelectorAll('.message-assistant');
+          if (assistants.length) {
+            assistants[assistants.length - 1].remove();
+          }
+          contentEl.innerHTML = format(newText);
+          sendMessage(newText, false, true, msg.content);
+        });
       });
       btnGroup.appendChild(editBtn);
 
@@ -403,16 +435,18 @@ function set_context(what) {
   };
 }
 
-async function sendMessage(regenText, isRegen) {
+async function sendMessage(regenText, isRegen, isEdit, originalText) {
   const text = regenText !== undefined ? regenText : messageInput.value.trim();
 
-  if (regenText === undefined) {
+  if (regenText === undefined && !isEdit) {
     messageInput.value = "";
     messageInput.style.height = "auto";
   }
 
   let body = { uid: _uid, text };
   if (isRegen) body.regen = true;
+  if (isEdit) body.edit = true;
+  if (isEdit && originalText) body.original_text = originalText;
   if (!_uid) {
     body.context = systemprompt;
   } else if (!text) {
@@ -491,7 +525,7 @@ async function sendMessage(regenText, isRegen) {
   assistantMsgEl.classList.add("message", "message-assistant");
   const contentEl = document.createElement("div");
   contentEl.classList.add("message-content");
-  contentEl.innerHTML = '<div class="typing-indicator">Typing...</div>';
+  contentEl.innerHTML = '';
   assistantMsgEl.appendChild(contentEl);
   messagesContainer.appendChild(assistantMsgEl);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -521,8 +555,6 @@ async function sendMessage(regenText, isRegen) {
               contentEl.innerHTML = format(partialContent);
             } else if (eventData.choices && eventData.choices[0] && eventData.choices[0].delta && eventData.choices[0].delta.reasoning) {
               hasThinking = true;
-              const typing = contentEl.querySelector('.typing-indicator');
-              if (typing) typing.remove();
               thinkingTokenCount++;
               thinkingContent += eventData.choices[0].delta.reasoning;
               thinkingTextEl.textContent = thinkingContent;
@@ -540,16 +572,13 @@ async function sendMessage(regenText, isRegen) {
     }
   } catch (e) {
     console.error('Stream error:', e);
+    snackbar('Connection error — check your network and try again');
   } finally {
     reader.releaseLock();
     clearInterval(thinkingInterval);
     _lastStreamedContent = partialContent;
     if (!hasThinking) {
       thinkingEl.remove();
-    }
-    if (assistantMsgEl) {
-      const typing = contentEl.querySelector('.typing-indicator');
-      if (typing) typing.remove();
     }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     maybeShowSurvey();
