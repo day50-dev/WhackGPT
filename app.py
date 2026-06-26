@@ -114,7 +114,6 @@ def generate_summary(text, max_length=30):
     try:
         import httpx
         headers = {
-            "Authorization": f"Bearer {DYVA_API_KEY}",
             "Content-Type": "application/json",
             "HTTP-Referer": "http://localhost",
             "X-Title": "WhackGPT"
@@ -460,7 +459,7 @@ async def stream_channel(websocket: WebSocket, what: str):
         print(f"WebSocket error: {e}")
     finally:
         await pubsub.unsubscribe(what)
-        await pubsub.close()
+        await pubsub.aclose()
 
 
 @app.websocket("/ws/channel/{id}")
