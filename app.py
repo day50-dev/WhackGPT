@@ -342,11 +342,12 @@ async def chat(data: dict):
             original_text = data.get("original_text", "")
             for i, item in enumerate(raw):
                 msg = json.loads(html.unescape(item.decode()))
+                if not isinstance(msg, dict):
+                    continue
                 if msg["role"] == "user" and (not original_text or msg["content"] == original_text):
                     msg["content"] = data["text"]
                     rds.lset(key, i, json.dumps(msg))
-                    if i > 0:
-                        rds.ltrim(key, i, -1)
+                    rds.ltrim(key, 0, i)
                     break
             history = add_to_session(uid)
         elif not data.get("regen"):
