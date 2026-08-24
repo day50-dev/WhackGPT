@@ -1,6 +1,7 @@
 var _uid = window.location.hash.slice(1) || localStorage.getItem("uid"),
   topicMap = {},
-  _lastStreamedContent = null;
+  _lastStreamedContent = null,
+  _pendingUserText = [];
 
 function snackbar(msg) {
   const el = document.getElementById('snackbar');
@@ -277,6 +278,13 @@ function renderMessages(messages, doClear) {
     messagesContainer.innerHTML = "";
   }
 
+  if (messages.some((m) => m.role !== "system")) {
+    const welcome = messagesContainer.querySelector(".welcome-message");
+    if (welcome) {
+      welcome.remove();
+    }
+  }
+
   messages.forEach((msg) => {
     if (msg.role == "system") {
       return;
@@ -426,6 +434,13 @@ function set_context(what) {
       handleEditHistory(message.old_text, message.new_text);
       return;
     }
+    if (message.role === 'user') {
+      const i = _pendingUserText.indexOf(message.content);
+      if (i !== -1) {
+        _pendingUserText.splice(i, 1);
+        return;
+      }
+    }
     if (message.role === 'assistant' && _lastStreamedContent && message.content === _lastStreamedContent) {
       _lastStreamedContent = null;
       return;
@@ -453,34 +468,17 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     return;
   }
 
-  const response = await fetch("chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (response.headers.get('content-type').includes('application/json')) {
-    // Tool response: full JSON
-    const data = await response.json();
-    if (!_uid && data.uid) {
-      localStorage.setItem("uid", data.uid);
-      set_context(data.uid);
-    }
-    if (data.data.length) {
-      renderMessages(data.data, true);
-    }
-    return;
+  // Paint the user's own message right away -- don't wait on the network.
+  // The server echoes it back over the channel websocket; _pendingUserText
+  // tells set_context() to drop that echo so it isn't rendered twice.
+  if (text && !isRegen && !isEdit && text[0] !== "/") {
+    _pendingUserText.push(text);
+    renderMessages([{ role: "user", content: text }]);
   }
 
-  // Streaming SSE
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let partialContent = '';
   let thinkingContent = '';
   let thinkingTokenCount = 0;
   let hasThinking = false;
-  let hasContent = false;
 
   // Create thinking block
   const thinkingEl = document.createElement("div");
@@ -530,6 +528,45 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
   messagesContainer.appendChild(assistantMsgEl);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
+  const abandon = () => {
+    clearInterval(thinkingInterval);
+    thinkingEl.remove();
+    assistantMsgEl.remove();
+  };
+
+  let response;
+  try {
+    response = await fetch("chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.error('Request error:', e);
+    abandon();
+    snackbar('Connection error \u2014 check your network and try again');
+    return;
+  }
+
+  if ((response.headers.get('content-type') || '').includes('application/json')) {
+    // Tool response: full JSON
+    abandon();
+    const data = await response.json();
+    if (!_uid && data.uid) {
+      localStorage.setItem("uid", data.uid);
+      set_context(data.uid);
+    }
+    if (data.data && data.data.length) {
+      renderMessages(data.data, true);
+    }
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let partialContent = '';
+
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -550,7 +587,6 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
             console.log(eventData);
 
             if (eventData.delta) {
-              hasContent = true;
               partialContent += eventData.delta;
               contentEl.innerHTML = format(partialContent);
             } else if (eventData.choices && eventData.choices[0] && eventData.choices[0].delta && eventData.choices[0].delta.reasoning) {

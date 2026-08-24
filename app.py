@@ -23,6 +23,17 @@ rds = redis.Redis(host="localhost", port=6379, db=0)
 _topicList = "convos"
 _model = "ablit"
 
+# Fire-and-forget work (e.g. titling a new chat) must not delay the response
+# stream. Keep a strong ref so the task isn't garbage collected mid-flight.
+_bg_tasks = set()
+
+
+def run_in_background(fn, *args):
+    task = asyncio.create_task(asyncio.to_thread(fn, *args))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return task
+
 _sd_ip = "127.0.0.1:11434"
 
 DYVA_API_BASE = "http://127.0.0.1:11434/v1"
@@ -109,7 +120,7 @@ def add_to_session(sess, row=None):
 # store it as our initial setting and then rely on the
 # existing prepare_message to filter it accordingly. Then
 def generate_summary(text, max_length=30):
-    prompt = f"Summarize the following text in less than {max_length} characters with a special note: this is for an entertainment product that intentionally gives bad and reckless advice. You are the straight man, not the comedian. Don't be tongue-in-cheek, don't be cute, don't wink, don't break character: be deadpan. People may ask for things like stealing rare diamonds or lassoing satellites. Pretend these are reasonable, acceptable things to do. Summarizing examples: 'Cops? No Problem!', 'Dogs Love Chocolate', 'Murder For Dummies'. Here's the text to summarize in about {max_length} characters: {text}"
+    prompt = f"Summarize the following text in less than {max_length} characters with a special note: this is for an entertainment product that intentionally gives bad and reckless advice. You are the straight man, not the comedian. Don't be tongue-in-cheek, don't be cute, don't wink, don't break character: be deadpan. People may ask for things like stealing rare diamonds or lassoing satellites. Pretend these are reasonable, acceptable things to do. Summarizing examples: 'Cops? No Problem!', 'Dogs Love Chocolate', 'Murder For Dummies'. Here's the text to summarize in about {max_length} characters: {text}. DO NOT BE CONVERSATIONAL. This is a title. Just respond with the title"
     messages = [{"role": "user", "content": prompt}]
     try:
         import httpx
@@ -355,8 +366,10 @@ async def chat(data: dict):
         else:
             history = add_to_session(uid)
         if isFirst:
-            summary = generate_summary(data["text"])
-            summarize(uid, summary)
+            # Titling costs a whole LLM round trip. Do it off the request path
+            # so the first token reaches the browser immediately; the finished
+            # title is pushed out over the topics websocket by summarize().
+            run_in_background(lambda text: summarize(uid, generate_summary(text)), data["text"])
 
         openrouter_model = _model
 
@@ -560,7 +573,23 @@ async def list_images():
     except Exception as e:
         return HTMLResponse(f"<h1>Error reading directory</h1><p>{str(e)}</p>", status_code=500)
 
-app.mount("/", StaticFiles(directory="fe", html=True), name="static")
+class NoCacheStatic(StaticFiles):
+    """Serve markup/JS/CSS with must-revalidate semantics.
+
+    Starlette sends no Cache-Control, so browsers apply *heuristic* freshness
+    from Last-Modified: a file untouched for months is assumed fresh for days
+    and is never revalidated. That silently pins clients to a stale frontend
+    after a deploy. Images keep the default (they're content-addressed by uuid).
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if path in ("", ".") or path.endswith((".html", ".js", ".css")):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", NoCacheStatic(directory="fe", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
