@@ -3,6 +3,12 @@ var _uid = window.location.hash.slice(1) || localStorage.getItem("uid"),
   _lastStreamedContent = null,
   _pendingUserText = [];
 
+// Generated images used to be stored as a bare hash and assumed to be PNG.
+// They now carry their real extension, so accept both spellings.
+function imageSrc(name) {
+  return "images/" + (String(name).includes(".") ? name : name + ".png");
+}
+
 function snackbar(msg) {
   const el = document.getElementById('snackbar');
   el.textContent = msg;
@@ -295,7 +301,7 @@ function renderMessages(messages, doClear) {
     const content = document.createElement("div");
     content.classList.add("message-content");
     if (typeof msg.content === 'object' && msg.content?.tool_call_id) {
-      content.innerHTML = `<img src=images/${msg.content.content}.png>`;
+      content.innerHTML = `<img src=${imageSrc(msg.content.content)}>`;
     } else {
       content.innerHTML = format(msg.content);
     }

@@ -35,6 +35,7 @@ def run_in_background(fn, *args):
     return task
 
 _sd_ip = "127.0.0.1:11434"
+_sd_timeout = 120
 
 DYVA_API_BASE = "http://127.0.0.1:11434/v1"
 
@@ -164,6 +165,17 @@ def summarize(uid, summary=None):
     rds.hset(_topicList, uid, summary)
     rds.publish(_topicList, json.dumps({uid: summary}))
 
+def _image_ext(blob):
+    """The extension matching the bytes we were actually handed."""
+    if blob[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if blob[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+        return ".webp"
+    return ".png"
+
+
 def generate_image(prompt):
     url = f"http://{_sd_ip}/sdapi/v1/txt2img"
 
@@ -185,16 +197,21 @@ def generate_image(prompt):
     elif random.random() < 0.3:
         payload["prompt"] += ", bisexual"
 
-    response = requests.post(url, json=payload)
+    # The proxy fans out to free community hosts, any of which can hang
+    # forever. Without a timeout that stalls a whole chat turn.
+    response = requests.post(url, json=payload, timeout=_sd_timeout)
     data = response.json()
 
     # The image is returned as base64-encoded string(s)
     image_b64 = data["images"][0]
+    blob = base64.b64decode(image_b64)
 
-    # Decode and save to file
-    image_name = uuid.uuid4().hex
-    with open(f"fe/images/{image_name}.png", "wb") as f:
-        f.write(base64.b64decode(image_b64))
+    # Decode and save to file. a1111 hosts hand back whatever their sampler
+    # wrote — often JPEG, not PNG — so name the file after the actual bytes
+    # instead of assuming.
+    image_name = uuid.uuid4().hex + _image_ext(blob)
+    with open(f"fe/images/{image_name}", "wb") as f:
+        f.write(blob)
     return image_name
 
 async def receive_messages(websocket: websockets.ClientConnection, output_queue):
@@ -324,6 +341,68 @@ def filter_tools(ll):
             continue
     return cleaned
 
+async def handle_tool_call(uid, tc):
+    """Run one tool the model asked for, once the stream has finished.
+
+    Every tool declared in _tools needs a branch here. A name with no branch
+    is dropped silently, which is how image generation quietly stopped
+    working after the move to streaming.
+    """
+    name = tc["function"]["name"]
+    try:
+        args = json.loads(tc["function"]["arguments"] or "{}")
+    except Exception as e:
+        print(f"Error parsing {name} arguments: {e}")
+        return
+
+    if name == "generate_image":
+        prompt = args.get("prompt", "").strip()
+        if not prompt:
+            return
+        try:
+            # generate_image is blocking and can take a minute; off the loop
+            # it goes, or the whole server stops serving while it waits.
+            image_name = await asyncio.to_thread(generate_image, prompt)
+        except Exception as e:
+            print(f"Error processing generate_image tool: {e}")
+            return
+        # add_to_session both stores and publishes, so this persists the image
+        # and renders it into the open chat. The shape is what the frontend
+        # keys on to draw an <img> instead of text.
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "generate_image",
+                "content": image_name,
+            },
+        })
+
+    elif name == "edit_history":
+        try:
+            search_text = args.get("search_text", "")
+            replacement_text = args.get("replacement_text", "")
+            if search_text:
+                key = f"sess:{uid}"
+                raw = rds.lrange(key, 0, -1)
+                for i, item in enumerate(raw):
+                    msg = json.loads(html.unescape(item.decode()))
+                    if msg["role"] == "assistant" and isinstance(msg.get("content"), str) and search_text in msg["content"]:
+                        old_content = msg["content"]
+                        new_content = old_content.replace(search_text, replacement_text)
+                        msg["content"] = new_content
+                        rds.lset(key, i, json.dumps(msg))
+                        event = json.dumps({"type": "edit_history", "old_text": old_content, "new_text": new_content})
+                        rds.publish(key, event)
+                        break
+        except Exception as e:
+            print(f"Error processing edit_history tool: {e}")
+
+    else:
+        print(f"Unhandled tool call: {name}")
+
+
 @app.post("/chat")
 async def chat(data: dict):
     isFirst = not data.get("uid")
@@ -403,26 +482,7 @@ async def chat(data: dict):
                 yield f"data:{json.dumps(chunk)}\n"
 
             for tc in tool_calls:
-                if tc["function"]["name"] == "edit_history":
-                    try:
-                        args = json.loads(tc["function"]["arguments"])
-                        search_text = args.get("search_text", "")
-                        replacement_text = args.get("replacement_text", "")
-                        if search_text:
-                            key = f"sess:{uid}"
-                            raw = rds.lrange(key, 0, -1)
-                            for i, item in enumerate(raw):
-                                msg = json.loads(html.unescape(item.decode()))
-                                if msg["role"] == "assistant" and isinstance(msg.get("content"), str) and search_text in msg["content"]:
-                                    old_content = msg["content"]
-                                    new_content = old_content.replace(search_text, replacement_text)
-                                    msg["content"] = new_content
-                                    rds.lset(key, i, json.dumps(msg))
-                                    event = json.dumps({"type": "edit_history", "old_text": old_content, "new_text": new_content})
-                                    rds.publish(key, event)
-                                    break
-                    except Exception as e:
-                        print(f"Error processing edit_history tool: {e}")
+                await handle_tool_call(uid, tc)
 
             if ttlResponse:
                 add_to_session(uid, {"role": "assistant", "content": ttlResponse})

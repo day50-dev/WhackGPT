@@ -34,7 +34,10 @@ async function generateImage() {
 
     if (data.res === true) {
       const imageName = data.data;
-      document.getElementById("generated-image").src = "images/" + imageName + ".png"; // Adjust path if needed
+      // Older images are a bare hash and always PNG; newer ones carry their
+      // real extension, since upstream often hands back JPEG.
+      document.getElementById("generated-image").src =
+        "images/" + (imageName.includes(".") ? imageName : imageName + ".png");
     } else {
       alert("Error: " + data.error);
     }
