@@ -383,19 +383,44 @@ async def handle_tool_call(uid, tc):
         try:
             search_text = args.get("search_text", "")
             replacement_text = args.get("replacement_text", "")
-            if search_text:
-                key = f"sess:{uid}"
-                raw = rds.lrange(key, 0, -1)
-                for i, item in enumerate(raw):
-                    msg = json.loads(html.unescape(item.decode()))
-                    if msg["role"] == "assistant" and isinstance(msg.get("content"), str) and search_text in msg["content"]:
-                        old_content = msg["content"]
-                        new_content = old_content.replace(search_text, replacement_text)
-                        msg["content"] = new_content
-                        rds.lset(key, i, json.dumps(msg))
-                        event = json.dumps({"type": "edit_history", "old_text": old_content, "new_text": new_content})
-                        rds.publish(key, event)
-                        break
+            if not search_text:
+                print("edit_history: no search_text given, nothing to edit")
+                return
+
+            key = f"sess:{uid}"
+            raw = rds.lrange(key, 0, -1)
+
+            # add_to_session lpushes, so index 0 is the newest message. The
+            # tool edits the most recent reply and only that one: searching
+            # further back used to silently rewrite an older message while
+            # the browser animated the newest bubble, so the UI showed an
+            # edit that had happened somewhere else. Image results are dicts,
+            # so skip past them to the last thing said in words.
+            target = None
+            for i, item in enumerate(raw):
+                msg = json.loads(html.unescape(item.decode()))
+                if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
+                    target = (i, msg)
+                    break
+
+            if target is None:
+                print("edit_history: no assistant reply in this session to edit")
+                return
+
+            i, msg = target
+            old_content = msg["content"]
+            if search_text not in old_content:
+                # The model has to reproduce its own words exactly; when it
+                # misquotes by a character this is the only trace.
+                print(f"edit_history: {search_text!r} is not in the last reply, no edit made")
+                return
+
+            new_content = old_content.replace(search_text, replacement_text)
+            msg["content"] = new_content
+            rds.lset(key, i, json.dumps(msg))
+            event = json.dumps({"type": "edit_history", "old_text": old_content, "new_text": new_content})
+            rds.publish(key, event)
+            print(f"edit_history: rewrote {search_text!r} -> {replacement_text!r}")
         except Exception as e:
             print(f"Error processing edit_history tool: {e}")
 

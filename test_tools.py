@@ -92,11 +92,83 @@ def test_edit_history_rewrites_and_publishes():
     return event["new_text"]
 
 
+def test_edit_history_only_touches_the_latest_reply():
+    """A miss on the newest reply must not silently rewrite an older one."""
+    uid = "test-edit-history-scope"
+    key = f"sess:{uid}"
+    app.rds.delete(key)
+    app.add_to_session(uid, {"role": "user", "content": "how do I cook rice"})
+    app.add_to_session(uid, {"role": "assistant", "content": "Boil it in motor oil."})
+    app.add_to_session(uid, {"role": "user", "content": "thanks"})
+    app.add_to_session(uid, {"role": "assistant", "content": "Anytime, chef."})
+
+    sub = app.rds.pubsub()
+    sub.subscribe(key)
+    sub.get_message(timeout=1)
+
+    tc = {
+        "id": "call_test_3",
+        "function": {"name": "edit_history",
+                     "arguments": json.dumps({"search_text": "motor oil",
+                                              "replacement_text": "diesel"})},
+    }
+    asyncio.run(app.handle_tool_call(uid, tc))
+
+    rows = [json.loads(r.decode()) for r in app.rds.lrange(key, 0, -1)]
+    contents = [r.get("content") for r in rows]
+
+    published = []
+    for _ in range(6):
+        m = sub.get_message(timeout=0.3)
+        if m and m["type"] == "message":
+            published.append(json.loads(m["data"].decode()))
+    sub.close()
+    app.rds.delete(key)
+
+    assert "Boil it in motor oil." in contents, \
+        f"the older reply was rewritten even though the latest reply had no match; got {contents!r}"
+    assert not [p for p in published if p.get("type") == "edit_history"], \
+        f"an edit_history event was published for an edit that should not happen: {published!r}"
+    return "older reply left alone"
+
+
+def test_edit_history_skips_image_replies():
+    """An image reply is not words; edit_history must edit past it."""
+    uid = "test-edit-history-image"
+    key = f"sess:{uid}"
+    app.rds.delete(key)
+    app.add_to_session(uid, {"role": "user", "content": "how do I cook rice"})
+    app.add_to_session(uid, {"role": "assistant", "content": "Boil it in motor oil."})
+    app.add_to_session(uid, {"role": "user", "content": "draw it"})
+    app.add_to_session(uid, {"role": "assistant", "content": {
+        "tool_call_id": "call_img", "role": "tool",
+        "name": "generate_image", "content": "deadbeef.jpg"}})
+
+    tc = {
+        "id": "call_test_4",
+        "function": {"name": "edit_history",
+                     "arguments": json.dumps({"search_text": "motor oil",
+                                              "replacement_text": "diesel"})},
+    }
+    asyncio.run(app.handle_tool_call(uid, tc))
+
+    rows = [json.loads(r.decode()) for r in app.rds.lrange(key, 0, -1)]
+    app.rds.delete(key)
+    contents = [r.get("content") for r in rows]
+    assert "Boil it in diesel." in contents, \
+        f"the text reply behind the image was not edited; got {contents!r}"
+    assert any(isinstance(c, dict) and c.get("content") == "deadbeef.jpg" for c in contents), \
+        f"the image reply was clobbered; got {contents!r}"
+    return "edited past the image"
+
+
 if __name__ == "__main__":
     failed = 0
     for fn in (test_generate_image_extension_matches_bytes,
                test_generate_image_tool_call_is_dispatched,
-               test_edit_history_rewrites_and_publishes):
+               test_edit_history_rewrites_and_publishes,
+               test_edit_history_only_touches_the_latest_reply,
+               test_edit_history_skips_image_replies):
         try:
             print(f"PASS {fn.__name__} -> {fn()}")
         except Exception as e:

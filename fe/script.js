@@ -634,7 +634,18 @@ function format(text) {
 function handleEditHistory(oldText, newText) {
   const msgs = messagesContainer.querySelectorAll('.message-assistant');
   if (!msgs.length) return;
-  const contentEl = msgs[msgs.length - 1].querySelector('.message-content');
+
+  // The backend edits the newest reply made of words, skipping generated
+  // images. Mirror that rule here instead of grabbing the last bubble, or
+  // the animation plays on a message that was never touched.
+  let contentEl = null;
+  for (let k = msgs.length - 1; k >= 0; k--) {
+    const el = msgs[k].querySelector('.message-content');
+    if (el && !el.querySelector('img')) {
+      contentEl = el;
+      break;
+    }
+  }
   if (!contentEl) return;
 
   const step = 30;
