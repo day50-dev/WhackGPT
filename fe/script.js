@@ -308,6 +308,13 @@ function renderMessages(messages, doClear) {
     messageEl.appendChild(content);
 
     if (msg.role === 'user') {
+      if (msg.ts) {
+        const ts = document.createElement('span');
+        ts.className = 'message-ts';
+        ts.textContent = formatDate(msg.ts);
+        messageEl.appendChild(ts);
+      }
+
       const btnGroup = document.createElement('div');
       btnGroup.className = 'user-btn-group';
 
@@ -479,7 +486,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
   // tells set_context() to drop that echo so it isn't rendered twice.
   if (text && !isRegen && !isEdit && text[0] !== "/") {
     _pendingUserText.push(text);
-    renderMessages([{ role: "user", content: text }]);
+    renderMessages([{ role: "user", content: text, ts: Math.floor(Date.now() / 1000) }]);
   }
 
   let thinkingContent = '';
@@ -629,6 +636,16 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
 
 function format(text) {
   return marked.parse(text);
+}
+
+function formatDate(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  const opts = sameYear
+    ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
+    : { year: "numeric", month: "short", day: "numeric" };
+  return d.toLocaleString(undefined, opts);
 }
 
 function handleEditHistory(oldText, newText) {

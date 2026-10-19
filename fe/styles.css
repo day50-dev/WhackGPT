@@ -43,7 +43,7 @@ li {
 }
 * {
   box-sizing: border-box;
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-family: "Lato", "Nimbus Sans", "DejaVu Sans", system-ui, sans-serif;
 }
 
 body {
@@ -124,7 +124,7 @@ table {
   background-color: var(--slightly-lighter);
 }
 .logo {
-  font-family: "Russo One", sans-serif;
+  font-family: "Lato", "Nimbus Sans", "DejaVu Sans", system-ui, sans-serif;
   color: #fff;
   text-decoration: none;
 }
@@ -312,6 +312,20 @@ table {
   background-color: var(--slightly-lighter);
   border-radius: 1rem;
   padding: 1rem;
+}
+
+.message-user {
+  flex-wrap: wrap;
+}
+
+.message-ts {
+  width: 100%;
+  text-align: right;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  padding: 0 0.25rem 0.15rem;
+  white-space: nowrap;
 }
 
 .message-content {

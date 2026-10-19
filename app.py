@@ -2,6 +2,7 @@ import uuid, os, redis, json, html
 import base64, requests, re
 import asyncio
 import random
+import time
 import sphn
 import tqdm
 import websockets
@@ -466,7 +467,7 @@ async def chat(data: dict):
                     break
             history = add_to_session(uid)
         elif not data.get("regen"):
-            history = add_to_session(uid, {"role": "user", "content": data["text"]})
+            history = add_to_session(uid, {"role": "user", "content": data["text"], "ts": int(time.time())})
         else:
             history = add_to_session(uid)
         if isFirst:
