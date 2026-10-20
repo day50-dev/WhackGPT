@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WhackGPT</title>
-  <link rel="stylesheet" href="styles.css?10">
+  <link rel="stylesheet" href="styles.css?18">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -28,6 +28,7 @@
       
       <div class="messages" id="messagesContainer">
         <div class="welcome-message">
+          <img class="welcome-logo" src="whack-1.avif" alt="WhackGPT" />
           <h2>WhackGPT</h2>
           <div class="pill-container" id="pillList">
           </div>
@@ -35,6 +36,10 @@
       </div>
       
       <div class="input-area">
+        <div class="scoreboard" id="scoreboard">
+          <span class="sb-dong" id="dongVal">1000Đ</span>
+          <span class="sb-skulls" id="skullVal">☠☠☠☠☠</span>
+        </div>
         <div class="attach-preview" id="attachPreview"></div>
         <div class="command-popup" id="commandPopup"></div>
         <form id="messageForm">
@@ -75,6 +80,7 @@
       </div>
     </div>
   <div id="snackbar"></div>
-  <script src="script.js?7"></script>
+  <script src="games.js?2"></script>
+  <script src="script.js?14"></script>
 </body>
 </html>

@@ -166,13 +166,6 @@ table {
   text-overflow: ellipsis;
 }
 
-.topic-date {
-  flex-shrink: 0;
-  font-size: 0.7rem;
-  color: var(--text-secondary);
-  opacity: 0.75;
-}
-
 .topic-item:hover {
   background-color: #2a2b32;
 }
@@ -299,6 +292,16 @@ table {
   padding: 2rem;
 }
 
+.welcome-logo {
+  width: 460px;
+  max-width: 80vw;
+  margin-bottom: 1.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.75rem;
+  background-color: var(--slightly-lighter);
+}
+
 .welcome-message h2 {
   font-size: 2rem;
   margin-bottom: 1.5rem;
@@ -380,13 +383,6 @@ table {
   justify-content: flex-end;
   gap: 0.25rem;
   padding: 0 0.25rem;
-}
-
-.message-ts {
-  font-size: 0.7rem;
-  color: var(--text-secondary);
-  opacity: 0.8;
-  white-space: nowrap;
 }
 
 .message-content {
@@ -923,6 +919,11 @@ textarea {
   .pill-container {
     grid-template-columns: 1fr;
   }
+
+  /* Keep the welcome logo visible on small screens by showing fewer pills. */
+  .pill-container .pill:nth-child(n + 3) {
+    display: none;
+  }
 }
 
 #snackbar {
@@ -952,4 +953,149 @@ textarea {
   10% { opacity: 1; transform: translateX(-50%) translateY(0); }
   80% { opacity: 1; transform: translateX(-50%) translateY(0); }
   100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+}
+
+/* ---- games (JS game master renders the board into the chat) ---- */
+.game-row {
+  display: flex;
+  width: 100%;
+  padding: 0.25rem 1rem;
+}
+
+.game-board {
+  width: 100%;
+  max-width: 560px;
+  background-color: var(--slightly-lighter);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  font-size: 0.9rem;
+}
+
+.game-hd {
+  font-weight: 700;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.5rem;
+}
+
+.game-hd .gscore {
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.game-hang {
+  white-space: pre;
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  line-height: 1.25;
+  color: var(--text-secondary);
+  margin: 0 0 0.5rem 0;
+}
+
+.game-word {
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  font-size: 1.2rem;
+  letter-spacing: 0.25em;
+  margin-bottom: 0.35rem;
+}
+
+.game-word b {
+  color: var(--primary);
+}
+
+.game-meta {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.game-meta .ghit {
+  color: var(--primary);
+  margin-right: 0.25rem;
+}
+
+.game-meta .gmiss {
+  opacity: 0.55;
+  text-decoration: line-through;
+  margin-right: 0.25rem;
+}
+
+.gscores {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  margin-bottom: 0.5rem;
+}
+
+.gteam b {
+  color: var(--primary);
+}
+
+.gstrikes {
+  margin-left: auto;
+  color: #e05d5d;
+  font-size: 0.75rem;
+}
+
+.gresults {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  border-top: 1px dashed var(--border-color);
+  padding-top: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.game-board .feed {
+  max-height: 9rem;
+  overflow-y: auto;
+}
+
+.game-board .ev {
+  padding: 0.1rem 0;
+}
+
+.game-board .ev .tag {
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.4rem;
+}
+
+.game-board .ev.sc {
+  color: var(--primary);
+}
+
+.game-turn {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.pill.game-pill {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* ---- scoreboard (dong + skulls) above the input box ---- */
+.scoreboard {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.25rem 0.5rem 0.15rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.sb-dong {
+  letter-spacing: 0.02em;
+}
+
+.sb-skulls {
+  letter-spacing: 0.1em;
 }

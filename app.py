@@ -3,6 +3,7 @@ import uuid, os, redis, json, html
 import base64, requests, re
 import asyncio
 import random
+import subprocess
 import time
 import sphn
 import tqdm
@@ -24,7 +25,7 @@ rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
 _topicTs = "convos_ts"
-_model = "ablit"
+_model = "qwen*blit"
 
 # Fire-and-forget work (e.g. titling a new chat) must not delay the response
 # stream. Keep a strong ref so the task isn't garbage collected mid-flight.
@@ -194,6 +195,7 @@ def generate_image(prompt):
         "cfg_scale": 3,
         "width": 512,
         "height": 512,
+        "model": "z*image,flux,qwen",
         # add other parameters as needed
     }
 
@@ -449,6 +451,59 @@ async def handle_tool_call(uid, tc):
         print(f"Unhandled tool call: {name}")
 
 
+_LIGHTPANDA = os.path.expanduser("~/.local/bin/lightpanda")
+
+
+def fetch_url_markdown(url, timeout_ms=12000):
+    """Load a page with Lightpanda and return its text as Markdown."""
+    try:
+        proc = subprocess.run(
+            [_LIGHTPANDA, "fetch", url, "--dump", "markdown", "--json",
+             "--terminate-ms", str(timeout_ms)],
+            capture_output=True, text=True, timeout=timeout_ms // 1000 + 15,
+        )
+        out = proc.stdout or ""
+        start = out.find("{")
+        if start == -1:
+            return None
+        obj, _ = json.JSONDecoder().raw_decode(out[start:])
+        if obj.get("http_status", 200) >= 400:
+            return None
+        return (obj.get("content") or "").strip() or None
+    except Exception as e:
+        print(f"fetch_url_markdown error for {url}: {e}")
+        return None
+
+
+_URL_RE = re.compile(r"https?://[^\s<>'\"\)\]]+")
+
+
+async def fetch_urls_in_text(text, max_urls=2, max_chars=8000):
+    """Fetch every unique URL in a message (via Lightpanda) and return a
+    combined Markdown digest, or "" if the message has no fetchable links."""
+    if not text:
+        return ""
+    seen, urls = set(), []
+    for u in _URL_RE.findall(text):
+        u = u.rstrip(".,;:!?")
+        if u not in seen:
+            seen.add(u)
+            urls.append(u)
+    urls = urls[:max_urls]
+    if not urls:
+        return ""
+    results = await asyncio.gather(
+        *[asyncio.to_thread(fetch_url_markdown, u) for u in urls]
+    )
+    parts = []
+    for u, md in zip(urls, results):
+        if md:
+            parts.append(f"Website {u}:\n{md[:max_chars]}")
+        else:
+            parts.append(f"Website {u}: (could not be fetched)")
+    return "\n\n---\n\n".join(parts)
+
+
 @app.post("/chat")
 async def chat(data: dict):
     isFirst = not data.get("uid")
@@ -487,14 +542,17 @@ async def chat(data: dict):
                     rds.ltrim(key, 0, i)
                     break
             history = add_to_session(uid)
+            fetched_pages = ""
         elif not data.get("regen"):
-            row = {"role": "user", "content": data["text"], "ts": int(time.time())}
+            row = {"role": "user", "content": data["text"]}
             if data.get("images"):
                 row["images"] = data["images"]
             history = add_to_session(uid, row)
             touch(uid)
+            fetched_pages = await fetch_urls_in_text(text)
         else:
             history = add_to_session(uid)
+            fetched_pages = ""
         if isFirst:
             # Titling costs a whole LLM round trip. Do it off the request path
             # so the first token reaches the browser immediately; the finished
@@ -504,10 +562,19 @@ async def chat(data: dict):
 
         openrouter_model = _model
 
+        # If the user linked any websites, hand the fetched pages to the model
+        # as part of their message so it can answer from the actual content.
+        model_history = filter_tools(history)
+        if fetched_pages and model_history and model_history[-1].get("role") == "user":
+            model_history[-1]["content"] = (
+                (model_history[-1].get("content") or "")
+                + "\n\n[Websites you linked, fetched for you:]\n" + fetched_pages
+            )
+
         async def generate():
             ttlResponse = ''
             tool_calls = []
-            async for chunk in openrouter_stream(openrouter_model, filter_tools(history), _tools, "auto"):
+            async for chunk in openrouter_stream(openrouter_model, model_history, _tools, "auto"):
                 choices = chunk.get("choices", [])
                 content = ""
                 if choices:
@@ -540,6 +607,45 @@ async def chat(data: dict):
                 add_to_session(uid, {"role": "assistant", "content": ttlResponse})
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
+
+@app.post("/game")
+async def game(data: dict):
+    """One-shot model move for a client-side game. The JS game master builds
+    the prompt; this just runs it through the model and returns the raw text."""
+    messages = [
+        {"role": "system", "content": data.get("system", "")},
+        {"role": "user", "content": data.get("user", "")},
+    ]
+    payload = {"model": _model, "messages": messages, "stream": False, "max_tokens": 80}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.post(f"{DYVA_API_BASE}/chat/completions", json=payload)
+        if r.status_code != 200:
+            return JSONResponse({"error": f"model error {r.status_code}"}, status_code=502)
+    try:
+        text = r.json()["choices"][0]["message"].get("content") or ""
+    except Exception:
+        return JSONResponse({"error": "bad model response"}, status_code=502)
+    return {"text": text.strip()}
+
+
+@app.post("/gameMove")
+async def game_move(data: dict):
+    """Persist game moves (user or model) into the chat history without a model call."""
+    uid = data.get("uid")
+    if not uid:
+        return JSONResponse({"error": "no uid"}, status_code=400)
+    msgs = data.get("messages", [])
+    saved = 0
+    for m in msgs:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role not in ("user", "assistant") or not content:
+            continue
+        add_to_session(uid, {"role": role, "content": content})
+        saved += 1
+    if saved:
+        touch(uid)
+    return {"res": True, "saved": saved}
 
 @app.post("/speak")
 async def speak(data: dict):

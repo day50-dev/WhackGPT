@@ -25,9 +25,35 @@ const commandPopup = document.getElementById("commandPopup");
 const COMMANDS = [
   { cmd: "/update", desc: "Rename this chat" },
   { cmd: "/delete", desc: "Delete this chat" },
+  { cmd: "/hangman", desc: "Play hangman vs the AI" },
+  { cmd: "/password", desc: "Play Password (clue game)" },
+  { cmd: "/taboo", desc: "Play Taboo" },
+  { cmd: "/poker", desc: "5-card draw vs the AI" },
+  { cmd: "/blackjack", desc: "vs the dealer" },
+  { cmd: "/stop", desc: "End the current game" },
 ];
 
 let pendingAttachments = [];
+
+// ---- scoreboard: dong wallet (the currency of whackgpt, for unexplained
+// reasons) + skulls (meaning TBD). Starts at 1000 dong. ----
+const dong = {
+  get() {
+    const v = parseInt(localStorage.getItem("whackdong"), 10);
+    return isNaN(v) ? 1000 : v;
+  },
+  set(v) {
+    localStorage.setItem("whackdong", String(Math.max(0, Math.round(v))));
+    renderScoreboard();
+  },
+  spend(n) { this.set(this.get() - n); },
+  earn(n) { this.set(this.get() + n); },
+};
+
+function renderScoreboard() {
+  const el = document.getElementById("dongVal");
+  if (el) el.textContent = dong.get() + "Đ";
+}
 
 function addFiles(fileList) {
   for (const file of fileList) {
@@ -193,8 +219,9 @@ var ws = _ws("topics"),
 async function init() {
   await renderTopics();
   autoResizeTextarea();
+  renderScoreboard();
 
-  newChatBtn.addEventListener("click", createNewChat);
+  newChatBtn.addEventListener("click", () => createNewChat());
 
   messageForm.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -269,8 +296,12 @@ ws.onmessage = (event) => {
 function createNewChat() {
   _uid = "";
   window.location.hash = "";
+  const keepDong = localStorage.getItem("whackdong"); // wallet survives the wipe
   localStorage.clear();
+  if (keepDong !== null) localStorage.setItem("whackdong", keepDong);
+  activeGame = null;
   clearMessages();
+  updateGamePlaceholder();
 }
 
 function loadChat(chatId) {
@@ -283,6 +314,7 @@ function loadChat(chatId) {
       messagesContainer.innerHTML = "";
       if (data.res) {
         renderMessages(data.data);
+        restoreGame();
       } else {
         console.error("Failed to load chat history:", data.error);
       }
@@ -320,6 +352,12 @@ function clearMessages() {
   welcome.className = "welcome-message";
   messagesContainer.appendChild(welcome);
 
+  let logo = document.createElement("img");
+  logo.className = "welcome-logo";
+  logo.src = "whack-1.avif";
+  logo.alt = "WhackGPT";
+  welcome.appendChild(logo);
+
   let title = document.createElement("h2");
   title.innerHTML = "WhackGPT";
   welcome.appendChild(title);
@@ -328,22 +366,25 @@ function clearMessages() {
   pills.className = "pill-container";
   welcome.appendChild(pills);
 
+  const makePill = (prompt, extra) => {
+    let div = document.createElement("div");
+    div.addEventListener("click", () => {
+      messageInput.value = prompt;
+      messageInput.style.height = "auto";
+      messageInput.style.height = messageInput.scrollHeight + "px";
+      messageInput.focus();
+    });
+    div.className = "pill" + (extra ? " " + extra : "");
+    div.innerHTML = prompt;
+    return div;
+  };
+
   for (let i = 0; i < 6; i++) {
     let prompt = promptList.splice(
       Math.floor(Math.random() * promptList.length),
       1,
     )[0];
-    let div = document.createElement("div");
-    div.addEventListener("click", () => {
-      const myprompt = prompt;
-      messageInput.value = myprompt;
-      messageInput.style.height = "auto";
-      messageInput.style.height = messageInput.scrollHeight + "px";
-      messageInput.focus();
-    });
-    div.className = "pill";
-    div.innerHTML = prompt;
-    pills.appendChild(div);
+    pills.appendChild(makePill(prompt));
   }
   return;
 }
@@ -385,13 +426,6 @@ function renderMessages(messages, doClear) {
     if (msg.role === 'user') {
       const footer = document.createElement('div');
       footer.className = 'user-footer';
-
-      if (msg.ts) {
-        const ts = document.createElement('span');
-        ts.className = 'message-ts';
-        ts.textContent = formatDate(msg.ts);
-        footer.appendChild(ts);
-      }
 
       const btnGroup = document.createElement('div');
       btnGroup.className = 'user-btn-group';
@@ -493,13 +527,6 @@ function topicItemEl(id, title, ts) {
   titleEl.innerHTML = format(title);
   topicItem.appendChild(titleEl);
 
-  if (ts) {
-    const dateEl = document.createElement("span");
-    dateEl.className = "topic-date";
-    dateEl.textContent = formatDate(ts);
-    topicItem.appendChild(dateEl);
-  }
-
   topicItem.addEventListener("click", () => loadChat(id));
   topicMap[id] = topicItem;
   return topicItem;
@@ -548,6 +575,161 @@ async function renderTopics() {
   });
 }
 
+// ---- games (the JS game master lives in games.js) ----
+let activeGame = null; // {id, st}
+const GAME_STORE = "whackgame";
+
+function saveGame() {
+  try {
+    if (activeGame) localStorage.setItem(GAME_STORE, JSON.stringify({ uid: _uid, ...activeGame }));
+    else localStorage.removeItem(GAME_STORE);
+  } catch (e) {}
+}
+
+function loadStoredGame() {
+  try {
+    const s = localStorage.getItem(GAME_STORE);
+    if (!s) return null;
+    const g = JSON.parse(s);
+    return GAMES[g.id] && g.st ? g : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function startGame(id) {
+  const G = GAMES[id];
+  if (!G) return;
+  if (G.stake && dong.get() < G.stake) {
+    snackbar("not enough dong — need " + G.stake + "Đ");
+    return;
+  }
+  if (activeGame) {
+    activeGame = null;
+    document.getElementById("gameRow")?.remove();
+  }
+  activeGame = { id, st: G.newState() };
+  saveGame();
+  if (G.stake) dong.spend(G.stake);
+  renderGameBoard();
+  updateGamePlaceholder();
+  if (G.actor(activeGame.st) === "model") gameModelTurn();
+}
+
+function endActiveGame(reason) {
+  if (!activeGame) return;
+  if (!activeGame.st.over) {
+    activeGame.st.over = true;
+    activeGame.st.result = reason || "game ended";
+  }
+  renderGameBoard();
+  activeGame = null;
+  localStorage.removeItem(GAME_STORE);
+  updateGamePlaceholder();
+}
+
+function renderGameBoard() {
+  if (!activeGame) return;
+  const G = GAMES[activeGame.id];
+  let row = document.getElementById("gameRow");
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "game-row";
+    row.id = "gameRow";
+    messagesContainer.appendChild(row);
+  }
+  row.innerHTML = '<div class="game-board">' + G.render(activeGame.st) + "</div>";
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function updateGamePlaceholder() {
+  if (activeGame && GAMES[activeGame.id].actor(activeGame.st) === "user") {
+    messageInput.placeholder = GAMES[activeGame.id].userPrompt(activeGame.st);
+  } else {
+    messageInput.placeholder = "WhackGPT is eager to chat...";
+  }
+}
+
+async function gameModelTurn(retry = true) {
+  if (!activeGame) return;
+  const G = GAMES[activeGame.id];
+  const p = G.modelPrompt(activeGame.st);
+  if (!p) return;
+  updateGamePlaceholder();
+  let d, ok = false;
+  try {
+    const r = await fetch("game", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ system: p.system, user: p.user }),
+    });
+    ok = r.ok;
+    d = await r.json();
+  } catch (e) {
+    snackbar("connection error");
+    if (retry) setTimeout(() => gameModelTurn(false), 800);
+    else endActiveGame("the AI stopped playing");
+    return;
+  }
+  if (!ok || !r_ok(d)) {
+    if (retry) {
+      snackbar("retrying…");
+      setTimeout(() => gameModelTurn(false), 800);
+    } else {
+      endActiveGame("the AI stopped playing");
+    }
+    return;
+  }
+  onGameMove("model", (d.text || "").trim());
+}
+
+// guard: the /game endpoint returns {text} or {error}
+function r_ok(d) {
+  if (!d || d.error || !d.text) {
+    snackbar("the model didn't answer — try again");
+    return false;
+  }
+  return true;
+}
+
+function onGameMove(who, text) {
+  if (!activeGame) return;
+  const G = GAMES[activeGame.id];
+  renderMessages([{ role: who === "model" ? "assistant" : "user", content: text }]);
+  // persist the move into the chat history (no model call)
+  if (_uid)
+    fetch("gameMove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uid: _uid, messages: [{ role: who === "model" ? "assistant" : "user", content: text }] }),
+    }).catch(() => {});
+  const res = G.apply(activeGame.st, text, who);
+  if (res.invalid) return; // not a legal move; keep waiting on the same player
+  activeGame.st.log.push({ who, text });
+  saveGame();
+  renderGameBoard();
+  if (activeGame.st.over) {
+    if (G.payout) dong.earn(G.payout(activeGame.st));
+    activeGame = null;
+    saveGame();
+  }
+  const next = activeGame ? G.actor(activeGame.st) : null;
+  updateGamePlaceholder();
+  if (next === "model") gameModelTurn();
+}
+
+function restoreGame() {
+  const g = loadStoredGame();
+  if (!g || g.uid !== (_uid || "")) return;
+  activeGame = { id: g.id, st: g.st };
+  (g.st.log || []).forEach((m) =>
+    renderMessages([{ role: m.who === "model" ? "assistant" : "user", content: m.text }]),
+  );
+  renderGameBoard();
+  updateGamePlaceholder();
+  if (GAMES[g.id].actor(g.st) === "model") gameModelTurn();
+}
+
 function set_context(what) {
   _uid = what;
   window.location.hash = _uid;
@@ -579,6 +761,7 @@ function set_context(what) {
 
 async function sendMessage(regenText, isRegen, isEdit, originalText) {
   const text = regenText !== undefined ? regenText : messageInput.value.trim();
+  const isDeleteCmd = text.split(/\s+/)[0] === "/delete";
 
   if (regenText === undefined && !isEdit) {
     messageInput.value = "";
@@ -598,6 +781,29 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     return;
   }
 
+  // games: the JS game master handles these entirely client-side
+  if (regenText === undefined && !isEdit && !isRegen && text && !pendingAttachments.length) {
+    const t = text.toLowerCase().trim();
+    if (t === "/stop" && activeGame) {
+      endActiveGame("abandoned");
+      return;
+    }
+    const gm = t.match(/^\/?(?:play )?(hangman|password|taboo|poker|blackjack)$/);
+    if (gm) {
+      if (activeGame) endActiveGame("abandoned");
+      startGame(gm[1]);
+      return;
+    }
+    if (activeGame && GAMES[activeGame.id].actor(activeGame.st) === "user") {
+      onGameMove("user", text);
+      return;
+    }
+    if (activeGame && GAMES[activeGame.id].actor(activeGame.st) === "model") {
+      snackbar("my turn — one moment");
+      return;
+    }
+  }
+
   const imagesToRender = pendingAttachments.map((a) => a.src);
   if (imagesToRender.length) clearAttachments();
 
@@ -606,7 +812,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
   // tells set_context() to drop that echo so it isn't rendered twice.
   if (!isRegen && !isEdit && (text || imagesToRender.length) && (text ? text[0] !== "/" : true)) {
     if (text) _pendingUserText.push(text);
-    renderMessages([{ role: "user", content: text || "", images: imagesToRender, ts: Math.floor(Date.now() / 1000) }]);
+    renderMessages([{ role: "user", content: text || "", images: imagesToRender }]);
   }
 
   let thinkingContent = '';
@@ -685,9 +891,14 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     // Tool response: full JSON
     abandon();
     const data = await response.json();
+    if (isDeleteCmd) {
+      createNewChat();
+      return;
+    }
     if (!_uid && data.uid) {
       localStorage.setItem("uid", data.uid);
       set_context(data.uid);
+      saveGame(); // re-key any in-progress game under the new uid
     }
     if (data.data && data.data.length) {
       renderMessages(data.data, true);
@@ -719,13 +930,17 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
             const eventData = JSON.parse(dataStr);
             console.log(eventData);
 
+            const chunkDelta = eventData.choices && eventData.choices[0] && eventData.choices[0].delta;
+            // Some backends label the thinking stream "reasoning", others
+            // "reasoning_content"; accept either so the token count shows.
+            const reasoning = chunkDelta && (chunkDelta.reasoning_content || chunkDelta.reasoning);
             if (eventData.delta) {
               partialContent += eventData.delta;
               contentEl.innerHTML = format(partialContent);
-            } else if (eventData.choices && eventData.choices[0] && eventData.choices[0].delta && eventData.choices[0].delta.reasoning) {
+            } else if (reasoning) {
               hasThinking = true;
               thinkingTokenCount++;
-              thinkingContent += eventData.choices[0].delta.reasoning;
+              thinkingContent += reasoning;
               thinkingTextEl.textContent = thinkingContent;
               thinkingTokensEl.textContent = thinkingTokenCount + ' tokens';
             }
@@ -756,16 +971,6 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
 
 function format(text) {
   return marked.parse(text);
-}
-
-function formatDate(ts) {
-  if (!ts) return "";
-  const d = new Date(ts * 1000);
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  const opts = sameYear
-    ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
-    : { year: "numeric", month: "short", day: "numeric" };
-  return d.toLocaleString(undefined, opts);
 }
 
 function handleEditHistory(oldText, newText) {
