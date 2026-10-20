@@ -2,3 +2,4 @@ __pycache__
 .envrc
 .direnv
 fe/images
+fe/uploads

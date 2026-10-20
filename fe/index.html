@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WhackGPT</title>
-  <link rel="stylesheet" href="styles.css?9">
+  <link rel="stylesheet" href="styles.css?10">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -35,18 +35,26 @@
       </div>
       
       <div class="input-area">
+        <div class="attach-preview" id="attachPreview"></div>
+        <div class="command-popup" id="commandPopup"></div>
         <form id="messageForm">
           <div class="input-container">
-            <textarea 
-              id="messageInput" 
+            <textarea
+              id="messageInput"
               placeholder="WhackGPT is eager to chat..."
               rows="1"
               autofocus></textarea>
-            <button type="submit" id="sendBtn">
-              <i class="fas fa-paper-plane"></i>
-            </button>
+            <div class="input-actions">
+              <button type="button" id="attachBtn" title="Attach an image">
+                <i class="fas fa-paperclip"></i>
+              </button>
+              <button type="submit" id="sendBtn">
+                <i class="fas fa-paper-plane"></i>
+              </button>
+            </div>
           </div>
         </form>
+        <input type="file" id="fileInput" accept="image/*" multiple hidden>
         <p class="disclaimer">This is shared chaos. Nothing is private. Everything is a lie.</p>
       </div>
     </main>
@@ -67,6 +75,6 @@
       </div>
     </div>
   <div id="snackbar"></div>
-  <script src="script.js?6"></script>
+  <script src="script.js?7"></script>
 </body>
 </html>

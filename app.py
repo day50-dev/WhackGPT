@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import uuid, os, redis, json, html
 import base64, requests, re
 import asyncio
@@ -10,7 +11,7 @@ import msgpack
 import numpy as np
 import httpx
 from redis.asyncio import Redis as ioredis
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -326,9 +327,22 @@ async def tts_endpoint(websocket: WebSocket, voice: str = "expresso/ex03-ex01_ha
 @app.post("/image")
 def image(data: dict):
     return {
-        "res": True, 
+        "res": True,
         "data": generate_image(data.get('prompt'))
     }
+
+@app.post("/upload")
+async def upload(files: list[UploadFile] = File(...)):
+    """Save uploaded photos to fe/uploads and return their URLs."""
+    os.makedirs("fe/uploads", exist_ok=True)
+    saved = []
+    for f in files:
+        blob = await f.read()
+        image_name = uuid.uuid4().hex + _image_ext(blob)
+        with open(f"fe/uploads/{image_name}", "wb") as out:
+            out.write(blob)
+        saved.append("/uploads/" + image_name)
+    return {"res": True, "data": saved}
 
 def filter_tools(ll):
     cleaned = []
@@ -441,9 +455,9 @@ async def chat(data: dict):
     uid = data.get("uid") or initialize_session(data["context"], _model)
     nextLine = None
 
-    if data.get("text"):
-        text = data["text"]
-        if text[0] == "/":
+    if data.get("text") or data.get("images"):
+        text = data.get("text") or ""
+        if text and text[0] == "/":
             parts = text[1:].split(" ")
             cmd = parts[0]
             if cmd == "delete":
@@ -474,7 +488,10 @@ async def chat(data: dict):
                     break
             history = add_to_session(uid)
         elif not data.get("regen"):
-            history = add_to_session(uid, {"role": "user", "content": data["text"], "ts": int(time.time())})
+            row = {"role": "user", "content": data["text"], "ts": int(time.time())}
+            if data.get("images"):
+                row["images"] = data["images"]
+            history = add_to_session(uid, row)
             touch(uid)
         else:
             history = add_to_session(uid)
@@ -482,7 +499,8 @@ async def chat(data: dict):
             # Titling costs a whole LLM round trip. Do it off the request path
             # so the first token reaches the browser immediately; the finished
             # title is pushed out over the topics websocket by summarize().
-            run_in_background(lambda text: summarize(uid, generate_summary(text)), data["text"])
+            title_text = text or "(an image was shared)"
+            run_in_background(lambda t: summarize(uid, generate_summary(t)), title_text)
 
         openrouter_model = _model
 

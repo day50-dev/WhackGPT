@@ -17,6 +17,57 @@ function snackbar(msg) {
 }
 const newChatBtn = document.getElementById("newChatBtn");
 const topicList = document.getElementById("topicList");
+const attachBtn = document.getElementById("attachBtn");
+const fileInput = document.getElementById("fileInput");
+const attachPreview = document.getElementById("attachPreview");
+const commandPopup = document.getElementById("commandPopup");
+
+const COMMANDS = [
+  { cmd: "/update", desc: "Rename this chat" },
+  { cmd: "/delete", desc: "Delete this chat" },
+];
+
+let pendingAttachments = [];
+
+function addFiles(fileList) {
+  for (const file of fileList) {
+    if (!file.type || !file.type.startsWith("image/")) continue;
+    const src = URL.createObjectURL(file);
+    pendingAttachments.push({ name: file.name, src });
+  }
+  renderAttachments();
+}
+
+function removeAttachment(i) {
+  const [gone] = pendingAttachments.splice(i, 1);
+  if (gone) URL.revokeObjectURL(gone.src);
+  renderAttachments();
+}
+
+function renderAttachments() {
+  attachPreview.innerHTML = "";
+  pendingAttachments.forEach((a, i) => {
+    const chip = document.createElement("div");
+    chip.className = "attach-chip";
+    const img = document.createElement("img");
+    img.src = a.src;
+    const x = document.createElement("button");
+    x.className = "attach-x";
+    x.innerHTML = "&times;";
+    x.addEventListener("click", () => removeAttachment(i));
+    chip.appendChild(img);
+    chip.appendChild(x);
+    attachPreview.appendChild(chip);
+  });
+  attachPreview.style.display = pendingAttachments.length ? "flex" : "none";
+}
+
+function clearAttachments() {
+  pendingAttachments.forEach((a) => URL.revokeObjectURL(a.src));
+  pendingAttachments = [];
+  fileInput.value = "";
+  renderAttachments();
+}
 const messagesContainer = document.getElementById("messagesContainer");
 const messageForm = document.getElementById("messageForm");
 const messageInput = document.getElementById("messageInput");
@@ -147,7 +198,27 @@ async function init() {
 
   messageForm.addEventListener("submit", (e) => {
     e.preventDefault();
+    hideCommandPopup();
     sendMessage();
+  });
+
+  attachBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", (e) => {
+    addFiles(e.target.files);
+    fileInput.value = "";
+  });
+
+  messageInput.addEventListener("input", updateCommandPopup);
+  messageInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideCommandPopup();
+  });
+
+  document.addEventListener("dragover", (e) => e.preventDefault());
+  document.addEventListener("drop", (e) => {
+    e.preventDefault();
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+      addFiles(e.dataTransfer.files);
+    }
   });
 
   if (!_uid) {
@@ -303,6 +374,12 @@ function renderMessages(messages, doClear) {
     } else {
       content.innerHTML = format(msg.content);
     }
+    (msg.images || []).forEach((src) => {
+      const img = document.createElement("img");
+      img.src = src;
+      img.className = "attachment-img";
+      content.appendChild(img);
+    });
     messageEl.appendChild(content);
 
     if (msg.role === 'user') {
@@ -321,7 +398,7 @@ function renderMessages(messages, doClear) {
 
       const editBtn = document.createElement('button');
       editBtn.className = 'edit-btn';
-      editBtn.innerHTML = '<i class="fas fa-pencil"></i><span>Edit</span>';
+      editBtn.innerHTML = '<i class="fas fa-pencil"></i>';
       editBtn.title = 'Edit message';
       editBtn.addEventListener('click', () => {
         const contentEl = messageEl.querySelector('.message-content');
@@ -358,7 +435,7 @@ function renderMessages(messages, doClear) {
 
       const regenBtn = document.createElement('button');
       regenBtn.className = 'regen-btn';
-      regenBtn.innerHTML = '<i class="fas fa-dice"></i><span>Regenerate</span>';
+      regenBtn.innerHTML = '<i class="fas fa-dice"></i>';
       regenBtn.title = 'Regenerate response';
       regenBtn.addEventListener('click', () => sendMessage(msg.content, true));
       btnGroup.appendChild(regenBtn);
@@ -512,18 +589,24 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
   if (isRegen) body.regen = true;
   if (isEdit) body.edit = true;
   if (isEdit && originalText) body.original_text = originalText;
+  if (pendingAttachments.length && !isRegen && !isEdit) {
+    body.images = pendingAttachments.map((a) => a.src);
+  }
   if (!_uid) {
     body.context = systemprompt;
-  } else if (!text) {
+  } else if (!text && !pendingAttachments.length) {
     return;
   }
+
+  const imagesToRender = pendingAttachments.map((a) => a.src);
+  if (imagesToRender.length) clearAttachments();
 
   // Paint the user's own message right away -- don't wait on the network.
   // The server echoes it back over the channel websocket; _pendingUserText
   // tells set_context() to drop that echo so it isn't rendered twice.
-  if (text && !isRegen && !isEdit && text[0] !== "/") {
-    _pendingUserText.push(text);
-    renderMessages([{ role: "user", content: text, ts: Math.floor(Date.now() / 1000) }]);
+  if (!isRegen && !isEdit && (text || imagesToRender.length) && (text ? text[0] !== "/" : true)) {
+    if (text) _pendingUserText.push(text);
+    renderMessages([{ role: "user", content: text || "", images: imagesToRender, ts: Math.floor(Date.now() / 1000) }]);
   }
 
   let thinkingContent = '';
@@ -755,6 +838,41 @@ function maybeShowSurvey() {
   _surveyCount++;
   if (_surveyCount !== 2) return;
   surveyOverlay.classList.add('open');
+}
+
+function updateCommandPopup() {
+  const v = messageInput.value;
+  if (v.startsWith("/") && !v.includes(" ")) {
+    const partial = v.slice(1).toLowerCase();
+    const matches = COMMANDS.filter((c) => c.cmd.slice(1).startsWith(partial));
+    commandPopup.innerHTML = "";
+    matches.forEach((c) => {
+      const item = document.createElement("div");
+      item.className = "command-item";
+      const name = document.createElement("span");
+      name.className = "command-name";
+      name.textContent = c.cmd;
+      const desc = document.createElement("span");
+      desc.className = "command-desc";
+      desc.textContent = c.desc;
+      item.appendChild(name);
+      item.appendChild(desc);
+      item.addEventListener("click", () => {
+        messageInput.value = c.cmd + " ";
+        messageInput.focus();
+        hideCommandPopup();
+      });
+      commandPopup.appendChild(item);
+    });
+    commandPopup.style.display = matches.length ? "block" : "none";
+  } else {
+    hideCommandPopup();
+  }
+}
+
+function hideCommandPopup() {
+  commandPopup.innerHTML = "";
+  commandPopup.style.display = "none";
 }
 
 const searchInput = document.getElementById('searchInput');

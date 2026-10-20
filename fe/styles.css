@@ -429,6 +429,7 @@ table {
 }
 
 .input-area {
+  position: relative;
   padding: 1rem;
   width: 100%;
   max-width: 800px;
@@ -444,13 +445,119 @@ table {
   align-items: flex-end;
 }
 
+.input-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin: 0.5rem 0.5rem 0.5rem 0;
+}
+
+#attachBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#attachBtn:hover {
+  background-color: var(--slightly-lighter);
+  color: var(--primary);
+}
+
+.attach-preview {
+  display: none;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.attach-chip {
+  position: relative;
+}
+
+.attach-chip img {
+  display: block;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.attach-x {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: var(--message-user-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attach-x:hover {
+  background: #c0392b;
+}
+
+.command-popup {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 0.25rem;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  z-index: 20;
+}
+
+.command-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+}
+
+.command-item:hover {
+  background-color: #2a2b32;
+}
+
+.command-name {
+  font-family: monospace;
+  color: var(--primary);
+}
+
+.command-desc {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
 textarea {
   width: 100%;
   background: transparent;
   border: none;
   color: var(--text-primary);
   resize: none;
-  padding: 1rem 3rem 1rem 1rem;
+  padding: 1rem;
   max-height: 200px;
   outline: none;
   font-size: 1rem;
@@ -458,9 +565,6 @@ textarea {
 }
 
 #sendBtn {
-  position: absolute;
-  right: 0.75rem;
-  bottom: 0.75rem;
   background: transparent;
   border: none;
   color: var(--text-secondary);
