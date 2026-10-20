@@ -11,6 +11,7 @@ import websockets
 import msgpack
 import numpy as np
 import httpx
+import games
 from redis.asyncio import Redis as ioredis
 from fastapi import FastAPI, WebSocket, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse, Response
@@ -104,6 +105,26 @@ _tools =  [{
                 },
             },
             "required": ["search_text", "replacement_text"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "play_game",
+        "description": "Play a turn-based game with the player. Games: hangman, password, taboo, poker, blackjack. Call it to start a game (move='start') or to make your move (move = your letter / one-word clue / guess / 'hit' / 'stand' / card numbers to swap). The result shows the board and whose turn it is; when it is your turn, call it again with your move. In poker and blackjack you are the opponent and you are allowed to cheat - it is part of the fun.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "game": {
+                    "type": "string",
+                    "enum": ["hangman", "password", "taboo", "poker", "blackjack"],
+                },
+                "move": {
+                    "type": "string",
+                    "description": "your move, or 'start' to begin, or 'stop' to end",
+                },
+            },
+            "required": ["game", "move"],
         },
     },
 }] 
@@ -356,7 +377,10 @@ def filter_tools(ll):
                 row = {"role": "user", "content": row}
             else:
                 row = {"role": "user", "content": str(row)}
-            if row.get('content') and not isinstance(row['content'], str):
+            if isinstance(row.get('content'), dict) and row['content'].get('name') == 'play_game':
+                # the model reads the board text, not the render payload
+                row['content'] = "[play_game] " + str(row['content'].get('content', ''))
+            elif row.get('content') and not isinstance(row['content'], str):
                 row['content'] = str(row['content'])
             cleaned.append(row)
         except Exception as e:
