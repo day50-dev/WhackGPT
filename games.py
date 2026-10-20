@@ -2,6 +2,7 @@
 # The model plays the games as a tool call inside normal chat; this module
 # owns the rules and the state. State shapes mirror fe/games.js exactly so
 # the frontend renderers work unchanged.
+import json
 import random
 import re
 
@@ -95,11 +96,29 @@ def new_deck():
 
 
 def card_value(c):
+    """Blackjack value: A=1, K/Q/J=10, 2-10 face."""
     r = c[:-1]
     if r == "A":
         return 1
     if r in ("K", "Q", "J"):
         return 10
+    return int(r)
+
+
+def rank_value(c):
+    """Poker rank for counting + straight: A=14, K=13, Q=12, J=11, 2-10 face.
+    (card_value above folds J/Q/K to 10, which is right for blackjack totals
+    but wrong for poker counting - a J+Q+K is three different cards, not
+    'three of a kind of tens'.)"""
+    r = c[:-1]
+    if r == "A":
+        return 14
+    if r == "K":
+        return 13
+    if r == "Q":
+        return 12
+    if r == "J":
+        return 11
     return int(r)
 
 
@@ -120,7 +139,7 @@ def bj_total(cards):
 
 def eval5(cards):
     """5-card hand -> {rank, name, tb} (higher rank/tb wins)."""
-    vals = sorted([card_value(c) for c in cards], reverse=True)
+    vals = sorted([rank_value(c) for c in cards], reverse=True)
     suits = [c[-1] for c in cards]
     flush = all(s == suits[0] for s in suits)
     uniq = []
@@ -282,8 +301,9 @@ def is_move(st, text, who):
     if i == "taboo":
         return True  # on the user's turn, anything typed is the move
     if i == "poker":
-        toks = t.lower().split()
-        return bool(toks) and (t.lower() == "none" or all(x in "12345" for x in toks))
+        t2 = t.lower()
+        return t2 in ("none", "nothing", "keep", "keep all", "keep them", "keep them all",
+                     "no swap", "no swaps", "all", "them all", "all of them") or bool(_parse_poker_nums(t))
     if i == "blackjack":
         return t.lower() in ("hit", "stand", "h", "s")
     return False
@@ -452,19 +472,46 @@ def _end_taboo_round(st, note=None):
     return ((note + " - ") if note else "") + "round " + str(st["round"]) + " - " + gname(st["describer"]) + " describes", False
 
 
+def _parse_poker_nums(text):
+    """Extract card numbers (1-5) from a model/user move. Accepts '2 4 5',
+    '2,4,5', '2-5' (range -> 2,3,4,5), '2-4-5', and natural mentions like
+    'cards 2 and 4'. Returns an ordered, de-duplicated list (may be empty)."""
+    t = (text or "").strip().lower()
+    expanded = []
+    for part in re.split(r"[\s,]+", t):
+        if not part:
+            continue
+        m = re.fullmatch(r"([1-5])\s*-\s*([1-5])", part)
+        if m:
+            # single dash between two digits = a range
+            a, b = int(m.group(1)), int(m.group(2))
+            lo, hi = (a, b) if a <= b else (b, a)
+            expanded.extend(range(lo, hi + 1))
+        elif "-" in part:
+            # multiple dashes = a dash-separated list (2-4-5 -> 2,4,5)
+            for d in part.split("-"):
+                if re.fullmatch(r"[1-5]", d):
+                    expanded.append(int(d))
+        elif re.fullmatch(r"[1-5]", part):
+            expanded.append(int(part))
+        # else: ignore non-numeric tokens
+    found = []
+    for n in expanded:
+        if 1 <= n <= 5 and n not in found:
+            found.append(n)
+    return found
+
+
 def _apply_poker(st, text, who):
-    t = (text or "").strip()
-    if t.lower() == "none":
+    t = (text or "").strip().lower()
+    if t in ("none", "nothing", "keep", "keep all", "keep them", "keep them all",
+             "no swap", "no swaps", "all", "them all", "all of them"):
         nums = []
     else:
-        toks = t.lower().split()
-        found = []
-        for x in toks:
-            if re.fullmatch(r"1?[1-5]", x) and int(x) not in found:
-                found.append(int(x))
-        if not found:
+        nums = _parse_poker_nums(t)
+        if not nums:
             return "name the card numbers (1-5) to swap, or say 'none'", True
-        nums = found[:3]
+        nums = nums[:3]
     if who == "user" and st["phase"] == "swap-user":
         st["userSwaps"] = len(nums)
         for n in nums:
@@ -611,9 +658,50 @@ def board_text(st):
                 + "; player: " + " ".join(st["user"]) + " (" + str(bj_total(st["user"])) + ")"
             )
         turn = "YOUR turn - 'hit' or 'stand'" if st["phase"] == "model" else "the player's turn"
+        # open table: the dealer sees everything
         return (
-            "blackjack - your upcard: " + st["model"][0]
-            + " (your second card is face down); the player is showing: " + st["user"][-1]
+            "blackjack - your hand: " + " ".join(st["model"]) + " (" + str(bj_total(st["model"])) + ")"
+            + "; player's hand: " + " ".join(st["user"]) + " (" + str(bj_total(st["user"])) + ")"
             + "; " + turn
         )
     return ""
+
+
+# ---- the live game block: injected into the model's context on every turn.
+# This is the ONLY place the model reads the board - history rows are neutral
+# markers, so the model cannot imitate board text as plain speech.
+_MOVE_HINT = {
+    "hangman": "a single letter (a-z)",
+    "password": "one word (your clue, or your guess)",
+    "taboo": "your description, or your one-word guess",
+    "poker": "the card numbers (1-5) to swap, e.g. '2 4', or 'none'",
+    "blackjack": "'hit' or 'stand'",
+}
+
+
+def game_block(st):
+    board = board_text(st)
+    a = actor(st)
+    log = st.get("log") or []
+    moves = []
+    for m in log[-10:]:
+        s = m.get("who", "?") + " " + json.dumps(m.get("text", ""))
+        if m.get("note"):
+            s += " [" + m["note"] + "]"
+        moves.append(s)
+    hint = _MOVE_HINT.get(st["id"], "your move")
+    if st.get("over"):
+        turn = "Game over: " + st.get("result", "")
+    elif a == "model":
+        turn = (
+            "It is YOUR turn - call the play_game tool (game=\"" + st["id"] + "\", move=your move) "
+            "to make your move. For " + st["id"] + " your move is: " + hint +
+            ". Call the tool; do not type the move as text."
+        )
+    else:
+        turn = "It is the player's turn."
+    out = "[GAME " + st["id"].upper() + "]\nboard: " + board
+    if moves:
+        out += "\nmoves: " + "; ".join(moves)
+    out += "\n" + turn
+    return out

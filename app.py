@@ -5,6 +5,8 @@ import asyncio
 import random
 import subprocess
 import time
+import threading
+import collections
 import sphn
 import tqdm
 import websockets
@@ -26,11 +28,12 @@ rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
 _topicTs = "convos_ts"
-_model = "qwen*blit"
+_model = "blit"
 
 # Fire-and-forget work (e.g. titling a new chat) must not delay the response
 # stream. Keep a strong ref so the task isn't garbage collected mid-flight.
 _bg_tasks = set()
+_ws_tasks = set()  # live websocket handlers, cancelled on a clean shutdown
 
 
 def run_in_background(fn, *args):
@@ -38,6 +41,15 @@ def run_in_background(fn, *args):
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
     return task
+
+
+def _track_ws():
+    """Track the current websocket handler task so a clean shutdown can cancel
+    it (pubsub.listen() blocks forever otherwise, hanging uvicorn's drain)."""
+    task = asyncio.current_task()
+    if task is not None:
+        _ws_tasks.add(task)
+        task.add_done_callback(_ws_tasks.discard)
 
 _sd_ip = "127.0.0.1:11434"
 _sd_timeout = 120
@@ -49,6 +61,7 @@ async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=
     headers = { "Content-Type": "application/json", }
 
     payload = {
+        "think": False,
         "model": model,
         "messages": messages,
         "stream": True
@@ -111,7 +124,7 @@ _tools =  [{
     "type": "function",
     "function": {
         "name": "play_game",
-        "description": "Play a turn-based game with the player. Games: hangman, password, taboo, poker, blackjack. Call it to start a game (move='start') or to make your move (move = your letter / one-word clue / guess / 'hit' / 'stand' / card numbers to swap). The result shows the board and whose turn it is; when it is your turn, call it again with your move. In poker and blackjack you are the opponent and you are allowed to cheat - it is part of the fun.",
+        "description": "Play a turn-based game with the player. Games: hangman, password, taboo, poker, blackjack. Call it to start a game (move='start') or to make your move (move = your letter / one-word clue / guess / 'hit' / 'stand' / card numbers to swap). The result shows the board and whose turn it is; when it is your turn, call it again with your move. In poker and blackjack you are the opponent and you are allowed to cheat - it is part of the fun. Only start a new game when the player asks to play again; after a game ends, wait for the player.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -125,6 +138,42 @@ _tools =  [{
                 },
             },
             "required": ["game", "move"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Search the web for current information. Use it for questions about recent events, news, prices, or anything that may have changed since your training. Returns a numbered list of title, URL, and snippet. To read a result in full, call web_fetch with its URL.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "what to search for",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "how many results to return (default 8, max 8)",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "web_fetch",
+        "description": "Fetch and read one explicit URL in full (rendered to text). Use it after web_search to read a specific page, or when the user gives you a link to read.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "the URL to fetch and read",
+                },
+            },
+            "required": ["url"],
         },
     },
 }] 
@@ -211,11 +260,7 @@ def generate_image(prompt):
 
     payload = {
         "prompt": prompt,
-        "steps": 10,
         "seed": -1,
-        "cfg_scale": 3,
-        "width": 512,
-        "height": 512,
         "model": "z*image,flux,qwen",
         # add other parameters as needed
     }
@@ -378,8 +423,33 @@ def filter_tools(ll):
             else:
                 row = {"role": "user", "content": str(row)}
             if isinstance(row.get('content'), dict) and row['content'].get('name') == 'play_game':
-                # the model reads the board text, not the render payload
-                row['content'] = "[play_game] " + str(row['content'].get('content', ''))
+                # a short neutral marker only: the model reads the live board
+                # from the game block injected into the user message, and these
+                # lines must not look like something the model itself said
+                # (it was imitating the full board text as plain text).
+                state = row['content'].get('state') or {}
+                if state.get('over'):
+                    row['content'] = "(game over: " + str(state.get('result', '')) + ")"
+                else:
+                    row['content'] = "(game move: " + str(state.get('id', '?')) + ")"
+            elif (
+                row.get("role") == "assistant"
+                and isinstance(row.get("content"), str)
+                and row["content"].strip().startswith("[play_game]")
+            ):
+                # the model fumbled a move by typing it as text - neutralize
+                # the imitable line before it feeds back into the context
+                row["content"] = "(a move was fumbled as text; if a game is in progress and it is your turn, call the play_game tool)"
+            elif isinstance(row.get('content'), dict) and row['content'].get('role') == 'tool':
+                # other tool results (web_search, web_fetch, generate_image):
+                # present as a proper 'tool' role message so the model reads
+                # them as data to use - not its own prior speech, which it
+                # would otherwise imitate verbatim.
+                row = {
+                    'role': 'tool',
+                    'tool_call_id': row['content'].get('tool_call_id', ''),
+                    'content': str(row['content'].get('content') or ''),
+                }
             elif row.get('content') and not isinstance(row['content'], str):
                 row['content'] = str(row['content'])
             cleaned.append(row)
@@ -423,6 +493,64 @@ async def handle_tool_call(uid, tc):
                 "role": "tool",
                 "name": "generate_image",
                 "content": image_name,
+            },
+        })
+
+    elif name == "play_game":
+        gname = (args.get("game") or "").lower()
+        move = (args.get("move") or "").strip()
+        if gname not in games.GAME_NAMES:
+            return
+        raw = rds.get(f"game:{uid}")
+        st = json.loads(raw) if raw else None
+        is_start = move.lower() in ("start", "start the game", "play", "")
+        started = False
+        if st is None or st.get("over"):
+            if is_start:
+                st = games.new_state(gname)
+                started = st is not None
+            else:
+                # no live game (finished or never started) and this is a move,
+                # not a start: don't silently deal a new game - tell the model
+                add_to_session(uid, {
+                    "role": "assistant",
+                    "content": {
+                        "tool_call_id": tc["id"],
+                        "role": "tool",
+                        "name": "play_game",
+                        "content": "no game in progress - call play_game with move='start' to begin",
+                        "state": None,
+                        "started": False,
+                    },
+                })
+                return
+        if move.lower() in ("stop", "quit", "stop the game"):
+            games.stop_game(st)
+            note = "game ended"
+            st["log"].append({"who": "model", "text": move, "note": note})
+        elif started and is_start:
+            note = gname + " started"
+        else:
+            note, invalid = games.apply_move(st, move, "model")
+            st["log"].append({"who": "model", "text": move, "note": note})
+        if st.get("over"):
+            rds.delete(f"game:{uid}")
+        else:
+            rds.set(f"game:{uid}", json.dumps(st))
+        # board + the move note: the note is the model's feedback on its own
+        # move (including "that was not a valid move" retries)
+        content = games.board_text(st)
+        if note:
+            content += "\n(move: " + note + ")"
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "play_game",
+                "content": content,
+                "state": st,
+                "started": started,
             },
         })
 
@@ -470,6 +598,40 @@ async def handle_tool_call(uid, tc):
             print(f"edit_history: rewrote {search_text!r} -> {replacement_text!r}")
         except Exception as e:
             print(f"Error processing edit_history tool: {e}")
+
+    elif name == "web_search":
+        query = (args.get("query") or "").strip()
+        if not query:
+            return
+        try:
+            max_results = int(args.get("max_results", 8) or 8)
+        except Exception:
+            max_results = 8
+        result = await asyncio.to_thread(keenable_search, query, max_results)
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "web_search",
+                "content": result,
+            },
+        })
+
+    elif name == "web_fetch":
+        url = (args.get("url") or "").strip()
+        if not url:
+            return
+        result = await asyncio.to_thread(web_fetch, url)
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "web_fetch",
+                "content": result,
+            },
+        })
 
     else:
         print(f"Unhandled tool call: {name}")
@@ -528,6 +690,185 @@ async def fetch_urls_in_text(text, max_urls=2, max_chars=8000):
     return "\n\n---\n\n".join(parts)
 
 
+# --- web search (Keenable keyless public endpoint) + web fetch ------------
+# The model needs a way to get *current* information ("what's the latest
+# news"). The automatic URL fetch only fires when the user pastes a link,
+# so these two tools let the model search and then read a page in full.
+
+WEB_SEARCH_RPM = 20
+_search_hits = collections.deque()
+_search_lock = threading.Lock()
+
+
+def _web_search_throttle():
+    """Sliding 60-second window, capped at WEB_SEARCH_RPM. True if the call
+    may proceed, False if we are over the rate (stay a polite occasional
+    user, not a scraper)."""
+    now = time.time()
+    with _search_lock:
+        while _search_hits and now - _search_hits[0] > 60:
+            _search_hits.popleft()
+        if len(_search_hits) >= WEB_SEARCH_RPM:
+            return False
+        _search_hits.append(now)
+        return True
+
+
+def _parse_keenable(obj):
+    """Normalize a Keenable response into [{title, url, snippet}]."""
+    out = []
+    for r in (obj.get("results") or []):
+        url = (r.get("url") or "").strip()
+        if not url:
+            continue
+        out.append({
+            "title": (r.get("title") or "").strip(),
+            "url": url,
+            "snippet": (r.get("snippet") or r.get("description") or "").strip(),
+        })
+    return out
+
+
+def _format_search_results(results):
+    if not results:
+        return "No results."
+    lines = []
+    for i, r in enumerate(results, 1):
+        lines.append(f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}")
+    return "\n\n".join(lines) + "\n\n(call web_fetch with a URL above to read one in full)"
+
+
+def keenable_search(query, max_results=8):
+    """One JSON POST to Keenable's keyless public endpoint and a parse. The
+    keyless endpoint wants a caller title, hence the X-Keenable-Title header.
+    Honors a 429 Retry-After and retries once; a second 429 is surfaced."""
+    if not _web_search_throttle():
+        return "web search is rate-limited, try again in a moment"
+    payload = {"query": query, "max_results": max(1, min(int(max_results or 8), 8)), "mode": "pro"}
+    for attempt in range(2):
+        try:
+            resp = requests.post(
+                "https://api.keenable.ai/v1/search/public",
+                json=payload,
+                headers={"X-Keenable-Title": "dyva"},
+                timeout=30,
+            )
+        except Exception as e:
+            return f"web search error: {e}"
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            wait = float(retry_after) if (retry_after or "").isdigit() else 2.0
+            if attempt == 0:
+                time.sleep(min(wait, 30))
+                continue
+            return "web search rate-limited (429)"
+        if resp.status_code >= 400:
+            return f"web search error: HTTP {resp.status_code}"
+        try:
+            obj = resp.json()
+        except Exception as e:
+            return f"web search error: bad JSON: {e}"
+        return _format_search_results(_parse_keenable(obj))
+    return "web search rate-limited (429)"
+
+
+def web_backend():
+    """Pick the best installed render engine: lightpanda, then chrome, then
+    curl (the no-JS floor)."""
+    lp = os.path.expanduser("~/.local/bin/lightpanda")
+    if os.path.exists(lp):
+        return "lightpanda", lp
+    for chrome in ("/usr/bin/google-chrome", "/usr/bin/chromium",
+                  "/usr/bin/chromium-browser", "/snap/bin/chromium"):
+        if os.path.exists(chrome):
+            return "chrome", chrome
+    return "curl", "curl"
+
+
+def _strip_html(html_text):
+    text = re.sub(r"<script.*?</script>", "", html_text, flags=re.S | re.I)
+    text = re.sub(r"<style.*?</style>", "", text, flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _render_text(url, engine, binary):
+    """Render a URL to text with the given engine. Returns text or None."""
+    try:
+        if engine == "lightpanda":
+            proc = subprocess.run(
+                [binary, "fetch", url, "--dump", "markdown", "--terminate-ms", "45000"],
+                capture_output=True, text=True, timeout=60,
+            )
+            return (proc.stdout or "").strip() or None
+        if engine == "chrome":
+            proc = subprocess.run(
+                [binary, "--headless", "--no-sandbox", "--disable-gpu",
+                 "--dump-dom", "--virtual-time-budget=15000", url],
+                capture_output=True, text=True, timeout=60,
+            )
+            return _strip_html(proc.stdout or "") or None
+        # curl: the no-JS floor
+        proc = subprocess.run(
+            ["curl", "-sL", "--max-time", "45", "-A", "Mozilla/5.0", url],
+            capture_output=True, text=True, timeout=60,
+        )
+        return _strip_html(proc.stdout or "") or None
+    except Exception:
+        return None
+
+
+def _web_probe(url):
+    """GET (following redirects) to get the final status, content-type, and
+    the post-redirect final URL."""
+    try:
+        resp = requests.get(url, allow_redirects=True, timeout=20,
+                           headers={"User-Agent": "Mozilla/5.0"})
+        return resp.status_code, (resp.headers.get("Content-Type") or ""), resp.url
+    except Exception:
+        return None, "", url
+
+
+def web_fetch(url, max_bytes=200_000):
+    """Read one explicit URL. Images are saved to disk and returned as a file
+    ref; everything else is rendered to text by the best engine, with a
+    cross-fallback (a browser that chokes retries with curl, and vice versa).
+    Text is capped at max_bytes with [truncated] appended."""
+    status, ctype, final_url = _web_probe(url)
+    if status is None:
+        return f"could not reach {url}"
+    if status >= 400:
+        return f"fetch failed: HTTP {status} for {final_url}"
+    ctype = ctype.split(";")[0].strip().lower()
+    if ctype.startswith("image/"):
+        try:
+            data = requests.get(final_url, timeout=30,
+                               headers={"User-Agent": "Mozilla/5.0"}).content
+        except Exception as e:
+            return f"could not download image: {e}"
+        ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+               "image/gif": ".gif"}.get(ctype, ".img")
+        name = f"webimg_{uuid.uuid4().hex}{ext}"
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        return f"image saved to {name} ({len(data)} bytes)"
+    engine, binary = web_backend()
+    text = _render_text(final_url, engine, binary)
+    if not text and engine != "curl":
+        text = _render_text(final_url, "curl", "curl")  # browser choked -> curl
+    if not text and engine == "curl":
+        alt, alt_bin = ("lightpanda", os.path.expanduser("~/.local/bin/lightpanda")) \
+            if os.path.exists(os.path.expanduser("~/.local/bin/lightpanda")) else ("chrome", "/usr/bin/chromium")
+        text = _render_text(final_url, alt, alt_bin)  # curl choked -> browser
+    if not text:
+        return f"could not render {final_url}"
+    if len(text) > max_bytes:
+        text = text[:max_bytes] + " [truncated]"
+    return text
+
+
 @app.post("/chat")
 async def chat(data: dict):
     isFirst = not data.get("uid")
@@ -575,6 +916,20 @@ async def chat(data: dict):
             touch(uid)
             fetched_pages = await fetch_urls_in_text(text)
         else:
+            # regen: the history currently ends with the assistant's response.
+            # Drop that response so the model re-answers the user's turn
+            # instead of seeing a conversation that already ended.
+            key = f"sess:{uid}"
+            raw = rds.lrange(key, 0, -1)
+            for item in raw:
+                msg = json.loads(html.unescape(item.decode()))
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("role") == "assistant"
+                    and isinstance(msg.get("content"), str)
+                ):
+                    rds.lrem(key, 1, item)
+                    break
             history = add_to_session(uid)
             fetched_pages = ""
         if isFirst:
@@ -595,81 +950,99 @@ async def chat(data: dict):
                 + "\n\n[Websites you linked, fetched for you:]\n" + fetched_pages
             )
 
+        # game: with a game in play, what the user types is their move when
+        # it's their turn (plain text, no special mode). The live board is
+        # injected as a [GAME ...] block - the single place the model reads
+        # game state (history rows are neutral markers, so the model can't
+        # imitate board text as plain speech).
+        raw = rds.get(f"game:{uid}")
+        if raw:
+            st = json.loads(raw)
+            is_plain = (
+                not data.get("edit") and not data.get("regen")
+                and text and not text.startswith("/")
+            )
+            published = False
+            if is_plain and text.lower().strip() in ("stop", "quit", "stop the game", "stop game"):
+                games.stop_game(st)
+                st["log"].append({"who": "user", "text": text, "note": "abandoned"})
+                published = True
+            elif not st.get("over"):
+                a = games.actor(st)
+                if a == "user" and games.is_move(st, text, "user"):
+                    note, _invalid = games.apply_move(st, text, "user")
+                    st["log"].append({"who": "user", "text": text, "note": note})
+                    published = True
+            if st.get("over"):
+                rds.delete(f"game:{uid}")
+            else:
+                rds.set(f"game:{uid}", json.dumps(st))
+            if published:
+                add_to_session(uid, {
+                    "role": "assistant",
+                    "content": {
+                        "tool_call_id": "usermove-" + str(int(time.time() * 1000)),
+                        "role": "tool",
+                        "name": "play_game",
+                        "content": games.board_text(st),
+                        "state": st,
+                        "started": False,
+                    },
+                })
+            if model_history and model_history[-1].get("role") == "user":
+                model_history[-1]["content"] = (
+                    (model_history[-1].get("content") or "") + "\n\n" + games.game_block(st)
+                )
+
         async def generate():
-            ttlResponse = ''
-            tool_calls = []
-            async for chunk in openrouter_stream(openrouter_model, model_history, _tools, "auto"):
-                choices = chunk.get("choices", [])
-                content = ""
-                if choices:
-                    delta = choices[0].get("delta", {})
-                    if "tool_calls" in delta:
-                        for tc in delta["tool_calls"]:
-                            idx = tc["index"]
-                            while len(tool_calls) <= idx:
-                                tool_calls.append({"id": "", "function": {"name": "", "arguments": ""}})
-                            if "id" in tc and tc["id"]:
-                                tool_calls[idx]["id"] = tc["id"]
-                            if "function" in tc:
-                                fn = tc["function"]
-                                if "name" in fn and fn["name"]:
-                                    tool_calls[idx]["function"]["name"] = fn["name"]
-                                if "arguments" in fn:
-                                    tool_calls[idx]["function"]["arguments"] += fn["arguments"]
-                    content = delta.get("content", "") or ""
-                    if content:
-                        ttlResponse += content
+            # Bounded tool loop: the model may call a tool (web_search,
+            # web_fetch, play_game, ...); we run it, feed the result back,
+            # and let the model answer from it. Capped at 4 passes so a
+            # model that keeps calling tools can't loop forever.
+            history = model_history
+            for _pass in range(4):
+                ttlResponse = ''
+                tool_calls = []
+                async for chunk in openrouter_stream(openrouter_model, history, _tools, "auto"):
+                    choices = chunk.get("choices", [])
+                    content = ""
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        if "tool_calls" in delta:
+                            for tc in delta["tool_calls"]:
+                                idx = tc["index"]
+                                while len(tool_calls) <= idx:
+                                    tool_calls.append({"id": "", "function": {"name": "", "arguments": ""}})
+                                if "id" in tc and tc["id"]:
+                                    tool_calls[idx]["id"] = tc["id"]
+                                if "function" in tc:
+                                    fn = tc["function"]
+                                    if "name" in fn and fn["name"]:
+                                        tool_calls[idx]["function"]["name"] = fn["name"]
+                                    if "arguments" in fn:
+                                        tool_calls[idx]["function"]["arguments"] += fn["arguments"]
+                        content = delta.get("content", "") or ""
+                        if content:
+                            ttlResponse += content
 
-                chunk['uid'] = uid
-                chunk['delta'] = content
-                yield f"data:{json.dumps(chunk)}\n"
+                    chunk['uid'] = uid
+                    chunk['delta'] = content
+                    yield f"data:{json.dumps(chunk)}\n"
 
-            for tc in tool_calls:
-                await handle_tool_call(uid, tc)
+                if not tool_calls:
+                    if ttlResponse:
+                        add_to_session(uid, {"role": "assistant", "content": ttlResponse})
+                    break
 
-            if ttlResponse:
-                add_to_session(uid, {"role": "assistant", "content": ttlResponse})
+                for tc in tool_calls:
+                    await handle_tool_call(uid, tc)
+                if ttlResponse:
+                    add_to_session(uid, {"role": "assistant", "content": ttlResponse})
+                # reload the history (now including the tool result) so the
+                # next pass lets the model read it and produce an answer
+                history = filter_tools(add_to_session(uid))
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
-
-@app.post("/game")
-async def game(data: dict):
-    """One-shot model move for a client-side game. The JS game master builds
-    the prompt; this just runs it through the model and returns the raw text."""
-    messages = [
-        {"role": "system", "content": data.get("system", "")},
-        {"role": "user", "content": data.get("user", "")},
-    ]
-    payload = {"model": _model, "messages": messages, "stream": False, "max_tokens": 80}
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        r = await client.post(f"{DYVA_API_BASE}/chat/completions", json=payload)
-        if r.status_code != 200:
-            return JSONResponse({"error": f"model error {r.status_code}"}, status_code=502)
-    try:
-        text = r.json()["choices"][0]["message"].get("content") or ""
-    except Exception:
-        return JSONResponse({"error": "bad model response"}, status_code=502)
-    return {"text": text.strip()}
-
-
-@app.post("/gameMove")
-async def game_move(data: dict):
-    """Persist game moves (user or model) into the chat history without a model call."""
-    uid = data.get("uid")
-    if not uid:
-        return JSONResponse({"error": "no uid"}, status_code=400)
-    msgs = data.get("messages", [])
-    saved = 0
-    for m in msgs:
-        role = m.get("role")
-        content = m.get("content", "")
-        if role not in ("user", "assistant") or not content:
-            continue
-        add_to_session(uid, {"role": role, "content": content})
-        saved += 1
-    if saved:
-        touch(uid)
-    return {"res": True, "saved": saved}
 
 @app.post("/speak")
 async def speak(data: dict):
@@ -726,12 +1099,14 @@ async def stream_channel(websocket: WebSocket, what: str):
 @app.websocket("/ws/channel/{id}")
 async def websocket_endpoint(websocket: WebSocket, id: str):
     await websocket.accept()
+    _track_ws()
     await stream_channel(websocket, f"sess:{id}")
 
 
 @app.websocket("/ws/topics")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    _track_ws()
     await stream_channel(websocket, _topicList)
 
 
@@ -840,5 +1215,43 @@ app.mount("/", NoCacheStatic(directory="fe", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
+    import signal
+    import threading
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Run the server in a daemon (non-main) thread: uvicorn's capture_signals()
+    # only installs its own SIGINT/SIGTERM handlers in the main thread, so our
+    # main-thread handlers below stay in charge of the clean exit.
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+    server = uvicorn.Server(config)
+
+    def _run_server():
+        server.run()
+
+    _server_thread = threading.Thread(target=_run_server, daemon=True)
+    _server_thread.start()
+
+    _shutdown_event = threading.Event()
+
+    def _handle_shutdown(sig, frame):
+        print("\nShutting down (clean exit)...")
+        # Cancel in-flight background work (summarize, etc.) and live
+        # websocket handlers so the shutdown doesn't hang on a stuck network
+        # call or a pubsub.listen() that blocks forever.
+        for t in list(_bg_tasks):
+            t.cancel()
+        for t in list(_ws_tasks):
+            t.cancel()
+        server.should_exit = True
+        _server_thread.join(timeout=8)
+        if _server_thread.is_alive():
+            print("Drain timed out - forcing exit.")
+            os._exit(0)
+        _shutdown_event.set()
+
+    signal.signal(signal.SIGINT, _handle_shutdown)
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+
+    # Block the main thread until the shutdown completes; then the main
+    # thread ends and the process exits (the server thread is a daemon that
+    # has already finished its clean drain).
+    _shutdown_event.wait()

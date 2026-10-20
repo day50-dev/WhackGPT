@@ -448,8 +448,12 @@ const TABOO = {
 
 // ---- card helpers (poker + blackjack) ----
 function feed(log) {
+  // Only show moves that actually landed - skip the referee's rejections
+  // ("not your move", "name the card numbers...", etc.) so the board stays clean.
+  const bad = /not your move|type a single letter|name the card numbers|say 'hit' or 'stand'|not a valid move|that was not|type 'none'|say 'none'/i;
+  const items = (log || []).filter((e) => !bad.test(e.note || ""));
   return '<div class="feed">' +
-    (log || []).map((e) => '<div class="ev"><span class="tag">' + e.who + '</span>' + gesc(e.text) + '</div>').join('') +
+    items.map((e) => '<div class="ev"><span class="tag">' + e.who + '</span>' + gesc(e.text) + '</div>').join('') +
     '</div>';
 }
 
@@ -467,6 +471,18 @@ function cardValue(c) {
   const r = c.slice(0, -1);
   if (r === "A") return 1;
   if (r === "K" || r === "Q" || r === "J") return 10;
+  return parseInt(r, 10);
+}
+
+// Poker rank for counting + straight: A=14, K=13, Q=12, J=11, 2-10 face.
+// (cardValue folds J/Q/K to 10 - right for blackjack totals, wrong for poker
+// counting: a J+Q+K is three different cards, not 'three of a kind'.)
+function rankValue(c) {
+  const r = c.slice(0, -1);
+  if (r === "A") return 14;
+  if (r === "K") return 13;
+  if (r === "Q") return 12;
+  if (r === "J") return 11;
   return parseInt(r, 10);
 }
 
@@ -488,7 +504,7 @@ function bjTotal(cards) {
 
 // 5-card hand evaluator -> {rank, name, tb} (higher rank/tb wins)
 function eval5(cards) {
-  const vals = cards.map(cardValue).sort((a, b) => b - a);
+  const vals = cards.map(rankValue).sort((a, b) => b - a);
   const suits = cards.map((c) => c.slice(-1));
   const flush = suits.every((s) => s === suits[0]);
   const uniq = [...new Set(vals)];
