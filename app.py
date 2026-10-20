@@ -22,6 +22,7 @@ ws_redis = ioredis.from_url("redis://localhost")
 rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
+_topicTs = "convos_ts"
 _model = "ablit"
 
 # Fire-and-forget work (e.g. titling a new chat) must not delay the response
@@ -149,6 +150,11 @@ def initialize_session(context, model):
     sess = uuid.uuid4().hex
     rds.lpush(f"sess:{sess}", json.dumps({"role": "system", "content": context}))
     return sess
+
+
+def touch(uid):
+    """Record when a chat was last active so the sidebar can order and bucket by date."""
+    rds.hset(_topicTs, uid, int(time.time()))
 
 
 def summarize(uid, summary=None):
@@ -443,6 +449,7 @@ async def chat(data: dict):
             if cmd == "delete":
                 summarize(uid, "")
                 rds.hdel(_topicList, uid)
+                rds.hdel(_topicTs, uid)
             elif cmd == "update":
                 newname = " ".join(parts[1:]).strip()
                 if newname:
@@ -468,6 +475,7 @@ async def chat(data: dict):
             history = add_to_session(uid)
         elif not data.get("regen"):
             history = add_to_session(uid, {"role": "user", "content": data["text"], "ts": int(time.time())})
+            touch(uid)
         else:
             history = add_to_session(uid)
         if isFirst:
@@ -540,6 +548,11 @@ async def topicList():
         chats = rds.hgetall(_topicList)
         # Decode keys and values from bytes to strings
         chats = {k.decode(): v.decode() for k, v in chats.items()}
+        # Last-activity timestamp per chat, used to order and bucket the sidebar.
+        ts = rds.hgetall(_topicTs)
+        ts = {k.decode(): int(v) for k, v in ts.items()}
+        for uid in chats:
+            chats[uid] = {"title": chats[uid], "ts": ts.get(uid)}
         return JSONResponse({"result": True, "data": {"channels": chats}})
     except Exception as e:
         print(f"Error syncing data: {e}")

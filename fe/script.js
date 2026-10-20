@@ -180,21 +180,19 @@ async function init() {
 }
 
 // channel update
+let _topicRefreshPending = false;
+function refreshTopics() {
+  if (_topicRefreshPending) return;
+  _topicRefreshPending = true;
+  renderTopics().finally(() => {
+    _topicRefreshPending = false;
+  });
+}
+
 ws.onmessage = (event) => {
   const message = JSON.parse(event.data);
   console.log("Received:", message);
-  for (const [key, value] of Object.entries(message)) {
-    if (topicMap[key]) {
-      if (value) {
-        topicMap[key].innerHTML = value;
-      } else {
-        topicList.removeChild(topicMap[key]);
-        delete topicMap[key];
-      }
-    } else {
-      addTopic(key, value);
-    }
-  }
+  refreshTopics();
 };
 
 function createNewChat() {
@@ -308,11 +306,14 @@ function renderMessages(messages, doClear) {
     messageEl.appendChild(content);
 
     if (msg.role === 'user') {
+      const footer = document.createElement('div');
+      footer.className = 'user-footer';
+
       if (msg.ts) {
         const ts = document.createElement('span');
         ts.className = 'message-ts';
         ts.textContent = formatDate(msg.ts);
-        messageEl.appendChild(ts);
+        footer.appendChild(ts);
       }
 
       const btnGroup = document.createElement('div');
@@ -320,7 +321,7 @@ function renderMessages(messages, doClear) {
 
       const editBtn = document.createElement('button');
       editBtn.className = 'edit-btn';
-      editBtn.innerHTML = '<i class="fas fa-pencil"></i>';
+      editBtn.innerHTML = '<i class="fas fa-pencil"></i><span>Edit</span>';
       editBtn.title = 'Edit message';
       editBtn.addEventListener('click', () => {
         const contentEl = messageEl.querySelector('.message-content');
@@ -357,12 +358,13 @@ function renderMessages(messages, doClear) {
 
       const regenBtn = document.createElement('button');
       regenBtn.className = 'regen-btn';
-      regenBtn.innerHTML = '<i class="fas fa-dice"></i>';
+      regenBtn.innerHTML = '<i class="fas fa-dice"></i><span>Regenerate</span>';
       regenBtn.title = 'Regenerate response';
       regenBtn.addEventListener('click', () => sendMessage(msg.content, true));
       btnGroup.appendChild(regenBtn);
 
-      messageEl.appendChild(btnGroup);
+      footer.appendChild(btnGroup);
+      messageEl.appendChild(footer);
     }
 
     if (msg.role === 'assistant' && typeof msg.content === 'string') {
@@ -400,21 +402,44 @@ function renderMessages(messages, doClear) {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-function addTopic(id, title) {
+function topicItemEl(id, title, ts) {
   const topicItem = document.createElement("div");
   topicItem.classList.add("topic-item");
   if (id === _uid) {
     topicItem.classList.add("active");
   }
   topicItem.dataset.id = id;
-  topicItem.innerHTML = `
-    <span>${format(title)}</span>
-  `;
+  topicItem.dataset.ts = ts || 0;
+
+  const titleEl = document.createElement("span");
+  titleEl.className = "topic-title";
+  titleEl.innerHTML = format(title);
+  topicItem.appendChild(titleEl);
+
+  if (ts) {
+    const dateEl = document.createElement("span");
+    dateEl.className = "topic-date";
+    dateEl.textContent = formatDate(ts);
+    topicItem.appendChild(dateEl);
+  }
 
   topicItem.addEventListener("click", () => loadChat(id));
-  topicList.prepend(topicItem);
   topicMap[id] = topicItem;
   return topicItem;
+}
+
+const _buckets = [
+  { label: "Last 7 days", days: 7 },
+  { label: "Last 30 days", days: 30 },
+  { label: "Older", days: null },
+];
+
+function bucketIndex(ts, nowSec) {
+  if (!ts) return _buckets.length - 1;
+  const ageDays = (nowSec - ts) / 86400;
+  if (ageDays <= 7) return 0;
+  if (ageDays <= 30) return 1;
+  return _buckets.length - 1;
 }
 
 async function renderTopics() {
@@ -422,16 +447,28 @@ async function renderTopics() {
   const response = await fetch("/topicList");
   const data = await response.json();
 
-  // Assuming the data structure is { channels: { chat_id: chat_data } }
-  chats = Object.entries(data.data.channels).map(([id, chat]) => {
-    // Parse the chat data if it's stored as a string
-    return {
-      id: id,
-      title: chat,
-    };
-  });
+  // channels is { chat_id: { title, ts } } (older payloads are a bare string)
+  const chats = Object.entries(data.data.channels).map(([id, chat]) =>
+    typeof chat === "string"
+      ? { id, title: chat, ts: 0 }
+      : { id, title: chat.title, ts: chat.ts || 0 },
+  );
 
-  chats.forEach((chat) => addTopic(chat.id, chat.title));
+  const nowSec = Math.floor(Date.now() / 1000);
+  const byBucket = new Array(_buckets.length).fill(0).map(() => []);
+  chats.forEach((chat) => byBucket[bucketIndex(chat.ts, nowSec)].push(chat));
+
+  byBucket.forEach((list, i) => {
+    if (!list.length) return;
+    list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+    const header = document.createElement("div");
+    header.className = "topic-header";
+    header.textContent = _buckets[i].label;
+    topicList.appendChild(header);
+
+    list.forEach((chat) => topicList.appendChild(topicItemEl(chat.id, chat.title, chat.ts)));
+  });
 }
 
 function set_context(what) {
@@ -736,7 +773,8 @@ searchInput.addEventListener('input', async () => {
   const data = await response.json();
   const channels = Object.entries(data.data.channels);
 
-  for (const [id, title] of channels) {
+  for (const [id, chat] of channels) {
+    const title = typeof chat === 'string' ? chat : chat.title;
     if (re.test(title)) {
       const item = document.createElement('div');
       item.className = 'search-result-item';
