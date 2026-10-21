@@ -67,7 +67,9 @@ body {
   background-color: var(--chat-bg);
   color: var(--text-primary);
   height: 100vh;
+  height: 100dvh; /* dvh tracks the mobile visual viewport (keyboard / URL bar); vh is the fallback */
   overflow: hidden;
+  overscroll-behavior: none; /* never let the document itself scroll on mobile */
   margin: 0;
 }
 
@@ -105,6 +107,7 @@ table {
 .app-container {
   display: flex;
   height: 100vh;
+  height: 100dvh; /* keep the whole app pinned to the visual viewport on mobile */
 }
 
 /* Sidebar Styles */
@@ -285,6 +288,7 @@ table {
 .messages {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain; /* scrolling the messages never propagates to the page */
   padding: 1rem;
   display: flex;
   flex-direction: column;

@@ -11,12 +11,42 @@ function _setCookieUid(uid) {
 var _uid = window.location.hash.slice(1) || localStorage.getItem("uid") || _cookieUid(),
   topicMap = {},
   _lastStreamedContent = null,
+  _lastStreamEndTime = 0, // when the last SSE stream finished; used to drop the late echo
   _pendingUserText = [];
 
 // Generated images used to be stored as a bare hash and assumed to be PNG.
 // They now carry their real extension, so accept both spellings.
 function imageSrc(name) {
   return "images/" + (String(name).includes(".") ? name : name + ".png");
+}
+
+// Build an <img> that falls back to the placeholder if the real image fails
+// to load (404, timeout, corrupt bytes). The onerror handler is attached
+// BEFORE src is set: setting src starts the load, and a fast failure (a quick
+// 404 or a cached error) can dispatch the error event before a handler added
+// on the next line is in place. A slow/hanging image never fires onerror, so
+// a timeout also triggers the fallback. onerror/onload are cleared after one
+// swap so a broken placeholder can't loop. Debug logging is on while we
+// diagnose why the fallback isn't firing.
+function makeImg(src) {
+  const img = document.createElement("img");
+  let settled = false;
+  let timer = null;
+  const showPlaceholder = (why) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    console.log("[makeImg] fallback triggered (" + why + ") for:", src);
+    img.onerror = null;
+    img.onload = null;
+    img.src = "images/placeholder.avif";
+  };
+  timer = setTimeout(() => showPlaceholder("timeout 10s"), 10000);
+  img.onerror = () => showPlaceholder("error event");
+  img.onload = () => { if (settled) return; settled = true; if (timer) clearTimeout(timer); console.log("[makeImg] loaded ok:", src); };
+  console.log("[makeImg] created, src:", src);
+  img.src = src;
+  return img;
 }
 
 function snackbar(msg) {
@@ -443,13 +473,18 @@ function renderMessages(messages, doClear) {
       if (msg.content.name === 'web_search' || msg.content.name === 'web_fetch') {
         return; // the model's answer is the display; the search/fetch is intermediate
       }
-      content.innerHTML = `<img src=${imageSrc(msg.content.content)}>`;
+      // a generate_image row whose content is not a real image filename (e.g.
+      // the "image already generated" dedup marker) would 404 and render as a
+      // broken image - skip it instead.
+      if (msg.content.name === 'generate_image' && !/^\w+\.(png|jpe?g|webp)$/i.test(String(msg.content.content))) {
+        return;
+      }
+      content.appendChild(makeImg(imageSrc(msg.content.content)));
     } else {
       content.innerHTML = format(msg.content);
     }
     (msg.images || []).forEach((src) => {
-      const img = document.createElement("img");
-      img.src = src;
+      const img = makeImg(src);
       img.className = "attachment-img";
       content.appendChild(img);
     });
@@ -709,8 +744,16 @@ function set_context(what) {
         return;
       }
     }
-    if (message.role === 'assistant' && _lastStreamedContent && message.content === _lastStreamedContent) {
-      _lastStreamedContent = null;
+    // The server echoes the assistant message over the channel websocket right
+    // after the SSE stream finishes. Drop that echo so it isn't rendered a
+    // second time. Two cases: (1) it matches the content we just streamed
+    // (exact match), or (2) it arrives in the small window right after the
+    // stream ended - the echo is published at the end of the stream, so it
+    // can race _lastStreamedContent and lose the exact-match check.
+    const justStreamed = _lastStreamedContent && message.content === _lastStreamedContent;
+    const lateEcho = _lastStreamEndTime && (Date.now() - _lastStreamEndTime) < 3000;
+    if (message.role === 'assistant' && typeof message.content === 'string' && (justStreamed || lateEcho)) {
+      if (justStreamed) _lastStreamedContent = null;
       return;
     }
     if (message.role === 'assistant' && typeof message.content === 'object' && message.content?.name === 'play_game') {
@@ -901,6 +944,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     reader.releaseLock();
     clearInterval(thinkingInterval);
     _lastStreamedContent = partialContent;
+    _lastStreamEndTime = Date.now();
     if (!hasThinking) {
       thinkingEl.remove();
     }
@@ -912,6 +956,31 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
 function format(text) {
   return marked.parse(text);
 }
+
+// marked renders markdown images (e.g. external magnific.com links) as bare
+// <img> tags with no fallback, so a 404 shows a broken-image icon. Override
+// the image renderer to add an onerror handler that swaps to the placeholder.
+// (The generated .png images go through makeImg, which already has the fallback.)
+marked.use({
+  renderer: {
+    image(...args) {
+      // Handle both the new (token object) and old (href, title, text)
+      // marked renderer signatures, so the fallback works across versions.
+      let href = "", alt = "", title = "";
+      if (typeof args[0] === "object" && args[0] !== null) {
+        href = args[0].href || "";
+        alt = args[0].text || "";
+        title = args[0].title || "";
+      } else {
+        href = args[0] || "";
+        title = args[1] || "";
+        alt = args[2] || "";
+      }
+      const titleAttr = title ? ` title="${title}"` : "";
+      return `<img src="${href}" alt="${alt}"${titleAttr} loading="lazy" onerror="this.onerror=null;this.src='images/placeholder.avif'">`;
+    },
+  },
+});
 
 function handleEditHistory(oldText, newText) {
   const msgs = messagesContainer.querySelectorAll('.message-assistant');
