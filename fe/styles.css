@@ -448,6 +448,10 @@ table {
   margin: 0 auto;
 }
 
+#messageForm {
+  position: relative;
+}
+
 .input-container {
   position: relative;
   border: 1px solid var(--border-color);

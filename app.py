@@ -192,6 +192,60 @@ _tools =  [{
     },
 }] 
 
+# User-side /commands that run one of the model's tools directly. The
+# frontend command popup (COMMANDS in script.js) mirrors this list.
+_TOOL_SLASH = {
+    "search": "web_search",
+    "fetch": "web_fetch",
+    "img": "generate_image",
+    "image": "generate_image",
+}
+_GAME_SLASH = ("hangman", "password", "taboo", "poker", "blackjack")
+
+
+def _slash_tool_call(cmd, parts):
+    """Build a synthetic tool call from a user's /command line.
+
+    Returns (tc, None) on success; (None, True) when the command is
+    recognized but its arguments are wrong (the caller drops it quietly -
+    the popup's description shows the usage); (None, False) for
+    unrecognized commands, which fall through to the model as plain text.
+    """
+    rest = " ".join(parts[1:]).strip()
+    if cmd in _TOOL_SLASH:
+        if not rest:
+            return None, True
+        tool = _TOOL_SLASH[cmd]
+        if tool == "web_search":
+            args = {"query": rest}
+        elif tool == "web_fetch":
+            args = {"url": rest}
+        else:
+            args = {"prompt": rest}
+    elif cmd in _GAME_SLASH:
+        if rest:
+            return None, True
+        tool = "play_game"
+        args = {"game": cmd, "move": "start"}
+    elif cmd == "edit":
+        # /edit <find> => <replace> - rewrite the model's last reply
+        if "=>" not in rest:
+            return None, True
+        search_text, replacement_text = rest.split("=>", 1)
+        search_text = search_text.strip()
+        replacement_text = replacement_text.strip()
+        if not search_text:
+            return None, True
+        tool = "edit_history"
+        args = {"search_text": search_text, "replacement_text": replacement_text}
+    else:
+        return None, False
+    return {
+        "id": "user-" + uuid.uuid4().hex[:12],
+        "function": {"name": tool, "arguments": json.dumps(args)},
+    }, None
+
+
 # row should be typed liked
 # {role: assistant/user, content: text}
 def add_to_session(sess, row=None):
@@ -571,6 +625,11 @@ async def handle_tool_call(uid, tc):
                     },
                 })
                 return
+        elif is_start:
+            # an explicit start while a game is live deals the new game
+            # (this is what the user's /<game> commands do)
+            st = games.new_state(gname)
+            started = True
         if move.lower() in ("stop", "quit", "stop the game"):
             games.stop_game(st)
             note = "game ended"
@@ -650,6 +709,25 @@ async def handle_tool_call(uid, tc):
         query = (args.get("query") or "").strip()
         if not query:
             return
+        # guard: the same search already ran in this turn (a looping model
+        # would otherwise re-search up to 4 times) - tell it to answer.
+        try:
+            for item in rds.lrange(f"sess:{uid}", 0, 5):
+                m = json.loads(html.unescape(item.decode()))
+                c = m.get("content")
+                if isinstance(c, dict) and c.get("name") == "web_search" and c.get("query") == query:
+                    add_to_session(uid, {
+                        "role": "assistant",
+                        "content": {
+                            "tool_call_id": tc["id"],
+                            "role": "tool",
+                            "name": "web_search",
+                            "content": "already searched for that in this turn - answer from those results, do not search again",
+                        },
+                    })
+                    return
+        except Exception:
+            pass
         try:
             max_results = int(args.get("max_results", 8) or 8)
         except Exception:
@@ -662,6 +740,7 @@ async def handle_tool_call(uid, tc):
                 "role": "tool",
                 "name": "web_search",
                 "content": result,
+                "query": query,
             },
         })
 
@@ -669,6 +748,24 @@ async def handle_tool_call(uid, tc):
         url = (args.get("url") or "").strip()
         if not url:
             return
+        # guard: the same URL was already fetched in this turn
+        try:
+            for item in rds.lrange(f"sess:{uid}", 0, 5):
+                m = json.loads(html.unescape(item.decode()))
+                c = m.get("content")
+                if isinstance(c, dict) and c.get("name") == "web_fetch" and c.get("url") == url:
+                    add_to_session(uid, {
+                        "role": "assistant",
+                        "content": {
+                            "tool_call_id": tc["id"],
+                            "role": "tool",
+                            "name": "web_fetch",
+                            "content": "already fetched that page in this turn - answer from it, do not fetch again",
+                        },
+                    })
+                    return
+        except Exception:
+            pass
         result = await asyncio.to_thread(web_fetch, url)
         add_to_session(uid, {
             "role": "assistant",
@@ -677,6 +774,7 @@ async def handle_tool_call(uid, tc):
                 "role": "tool",
                 "name": "web_fetch",
                 "content": result,
+                "url": url,
             },
         })
 
@@ -921,6 +1019,7 @@ async def chat(data: dict):
     isFirst = not data.get("uid")
     uid = data.get("uid") or initialize_session(data["context"], _model)
     nextLine = None
+    tool_cmd = None
 
     if data.get("text") or data.get("images"):
         text = data.get("text") or ""
@@ -931,14 +1030,22 @@ async def chat(data: dict):
                 summarize(uid, "")
                 rds.hdel(_topicList, uid)
                 rds.hdel(_topicTs, uid)
+                return JSONResponse({"res": True, "data": [], "uid": uid})
             elif cmd == "update":
                 newname = " ".join(parts[1:]).strip()
                 if newname:
                     summarize(uid, newname)
                 else:
                     summarize(uid)
-
-            return JSONResponse({"res": True, "data": [], "uid": uid})
+                return JSONResponse({"res": True, "data": [], "uid": uid})
+            else:
+                # /search, /fetch, /img, /<game>: run one of the model's
+                # tools directly (the popup mirrors _slash_tool_call). The
+                # result is saved and the model answers from it. A valid
+                # tool command falls through to the normal flow below.
+                tool_cmd, bad_usage = _slash_tool_call(cmd, parts)
+                if bad_usage:
+                    return JSONResponse({"res": True, "data": [], "uid": uid})
 
         if data.get("edit"):
             key = f"sess:{uid}"
@@ -961,22 +1068,31 @@ async def chat(data: dict):
                 row["images"] = data["images"]
             history = add_to_session(uid, row)
             touch(uid)
-            fetched_pages = await fetch_urls_in_text(text)
+            # a /fetch command fetches its own URL - don't double-fetch it
+            fetched_pages = "" if tool_cmd else await fetch_urls_in_text(text)
         else:
-            # regen: the history currently ends with the assistant's response.
-            # Drop that response so the model re-answers the user's turn
-            # instead of seeing a conversation that already ended.
+            # regen: truncate the session at the user message being
+            # regenerated (the one the dice was pressed on), dropping
+            # everything more recent (the old response and any later turns),
+            # so the model re-answers that turn instead of seeing a
+            # conversation that already ended. The list is most-recent-first,
+            # so we find the anchor (the most recent user message matching the
+            # sent text) and ltrim to keep only it and the older messages.
             key = f"sess:{uid}"
             raw = rds.lrange(key, 0, -1)
-            for item in raw:
+            anchor_idx = None
+            for i, item in enumerate(raw):
                 msg = json.loads(html.unescape(item.decode()))
                 if (
                     isinstance(msg, dict)
-                    and msg.get("role") == "assistant"
-                    and isinstance(msg.get("content"), str)
+                    and msg.get("role") == "user"
+                    and msg.get("content") == data.get("text")
                 ):
-                    rds.lrem(key, 1, item)
+                    anchor_idx = i
                     break
+            if anchor_idx is not None and anchor_idx > 0:
+                # keep only the anchor and older messages (index anchor_idx..end)
+                rds.ltrim(key, anchor_idx, -1)
             history = add_to_session(uid)
             fetched_pages = ""
         if isFirst:
@@ -988,6 +1104,14 @@ async def chat(data: dict):
 
         openrouter_model = _model
 
+        if tool_cmd:
+            # The user's /command ran a model tool directly. Run it before
+            # building the model context so the result composes with the
+            # fetched pages and the game block exactly as a model-made call
+            # would, and the model reads it on its first pass.
+            await handle_tool_call(uid, tool_cmd)
+            history = add_to_session(uid)
+
         # If the user linked any websites, hand the fetched pages to the model
         # as part of their message so it can answer from the actual content.
         model_history = filter_tools(history)
@@ -995,6 +1119,28 @@ async def chat(data: dict):
             model_history[-1]["content"] = (
                 (model_history[-1].get("content") or "")
                 + "\n\n[Websites you linked, fetched for you:]\n" + fetched_pages
+            )
+        if tool_cmd and model_history and model_history[-1].get("role") == "user":
+            # a model that sees a bare /command tends to re-run the tool
+            # instead of answering from its result - tell it it already ran.
+            tname = tool_cmd["function"]["name"]
+            if tname == "play_game":
+                raw = rds.get(f"game:{uid}")
+                who = json.loads(raw).get("turn") if raw else "user"
+                if who == "model":
+                    nudge = " It is your turn now - describe the board, then make your move with the tool."
+                else:
+                    nudge = " It is the player's turn now - describe the board and what to do. Do not call the tool again until the player moves."
+            elif tname == "generate_image":
+                nudge = " The image is ready - comment on it for the player."
+            elif tname == "edit_history":
+                nudge = " The player used /edit to change your last reply - acknowledge it briefly."
+            else:
+                nudge = " Answer the player from that result now - do not call the tool again."
+            model_history[-1]["content"] = (
+                (model_history[-1].get("content") or "")
+                + "\n\n[You ran a /command; the tool already ran and its result is in the tool message above."
+                + nudge + "]"
             )
 
         # game: with a game in play, what the user types is their move when
@@ -1047,6 +1193,13 @@ async def chat(data: dict):
             # and let the model answer from it. Capped at 4 passes so a
             # model that keeps calling tools can't loop forever.
             history = model_history
+            ran_tools = set()  # (name, args) already run this turn
+            if tool_cmd:
+                try:
+                    _a = json.loads(tool_cmd["function"]["arguments"] or "{}")
+                except Exception:
+                    _a = {}
+                ran_tools.add((tool_cmd["function"]["name"], json.dumps(_a, sort_keys=True)))
             for _pass in range(4):
                 ttlResponse = ''
                 tool_calls = []
@@ -1128,8 +1281,53 @@ async def chat(data: dict):
                 # client live, but only the FINAL pass's text (no tool calls)
                 # is persisted. The tool results ARE saved (via handle_tool_call)
                 # so the model can read them.
+                #
+                # The intermediate text WAS already streamed to the client (it
+                # can't be unstreamed), and the model often repeats the same
+                # line on the final pass - so the user would see it twice. Tell
+                # the client to clear the pending text now; the final pass's
+                # text is the only thing that stays.
+                # Duplicate check: is this pass re-calling tools that were
+                # already run this turn (a 9B model loops on the same search
+                # instead of answering from its results)?
+                sigs = []
+                for tc in tool_calls:
+                    try:
+                        _a = json.loads(tc["function"]["arguments"] or "{}")
+                    except Exception:
+                        _a = {}
+                    sigs.append((tc["function"]["name"], json.dumps(_a, sort_keys=True)))
+                if ran_tools and all(s in ran_tools for s in sigs):
+                    # The model is looping on tools it already ran: force a
+                    # text-only final pass (no tools offered, so it must
+                    # answer from what it has).
+                    yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
+                    final_text = ''
+                    try:
+                        async for chunk in openrouter_stream(openrouter_model, history, None, "auto"):
+                            choices = chunk.get("choices", [])
+                            content = ""
+                            if choices:
+                                content = choices[0].get("delta", {}).get("content", "") or ""
+                            final_text += content
+                            chunk['uid'] = uid
+                            chunk['delta'] = content
+                            yield f"data:{json.dumps(chunk)}\n"
+                    except Exception as e:
+                        print(f"forced final pass failed: {type(e).__name__}: {e}")
+                    if final_text:
+                        add_to_session(uid, {"role": "assistant", "content": final_text})
+                    break
+
+                yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
                 for tc in tool_calls:
                     await handle_tool_call(uid, tc)
+                for tc in tool_calls:
+                    try:
+                        _a = json.loads(tc["function"]["arguments"] or "{}")
+                    except Exception:
+                        _a = {}
+                    ran_tools.add((tc["function"]["name"], json.dumps(_a, sort_keys=True)))
                 history = filter_tools(add_to_session(uid))
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
@@ -1320,9 +1518,22 @@ if __name__ == "__main__":
     # the server automatically - no manual restart needed, and the editor
     # (or an agent) never has to kill the running process. uvicorn's own
     # signal handlers manage the clean exit (stop the reloader + the server
-    # subprocess); a stuck handler is force-killed after a timeout, so Ctrl+C
-    # still exits promptly.
+    # subprocess).
+    #
+    # timeout_graceful_shutdown: the websocket handlers block forever on
+    # pubsub.listen(), so they never complete on their own. Without a finite
+    # timeout, Ctrl+C hangs on "Waiting for background tasks to complete"
+    # until a second Ctrl+C force-quits. A finite grace period lets in-flight
+    # requests finish, then uvicorn cancels the stuck handler tasks (their
+    # finally blocks unsubscribe + close the pubsub), so a single Ctrl+C
+    # exits cleanly.
     # reload (and workers) require the app as an import string, not the app
     # object: the reloader spawns a subprocess that re-imports the app by
     # name, so it can't be handed across the process boundary as an object.
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        timeout_graceful_shutdown=5,
+    )
