@@ -406,6 +406,17 @@ table {
   line-height: 1.5;
 }
 
+/* The 🤖 in the edit animation: 2x text size, but the box is capped so
+   the line height doesn't balloon - the glyph overflows the box instead
+   of stretching the line. */
+.edit-robot {
+  display: inline-block;
+  font-size: 2em;
+  height: 1.2em;
+  line-height: 1.2em;
+  vertical-align: middle;
+}
+
 .edit-textarea {
   width: 100%;
   background: var(--input-bg);

@@ -137,6 +137,21 @@ _tools =  [{
 }, {
     "type": "function",
     "function": {
+        "name": "get_history",
+        "description": "Read the exact text of the most recent messages in this conversation (newest first, your own replies included). Call it before edit_history to get the exact wording of what you said - edit_history only matches exact text, so never guess your own words.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "how many recent messages to read (default 5, max 20)",
+                },
+            },
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
         "name": "play_game",
         "description": "Play a turn-based game with the player. Games: hangman, password, taboo, poker, blackjack. Call it to start a game (move='start') or to make your move (move = your letter / one-word clue / guess / 'hit' / 'stand' / card numbers to swap). The result shows the board and whose turn it is; when it is your turn, call it again with your move. In poker and blackjack you are the opponent and you are allowed to cheat - it is part of the fun. Only start a new game when the player asks to play again; after a game ends, wait for the player.",
         "parameters": {
@@ -229,6 +244,8 @@ def _slash_tool_call(cmd, parts):
         args = {"game": cmd, "move": "start"}
     elif cmd == "edit":
         # /edit <find> => <replace> - rewrite the model's last reply
+        # (handled as a pure server-side command in /chat; the model
+        # never sees it)
         if "=>" not in rest:
             return None, True
         search_text, replacement_text = rest.split("=>", 1)
@@ -660,13 +677,46 @@ async def handle_tool_call(uid, tc):
             },
         })
 
+    elif name == "get_history":
+        # Read the exact text of recent messages (newest first) so the
+        # model can quote its own words exactly for edit_history.
+        try:
+            limit = max(1, min(int(args.get("limit", 5) or 5), 20))
+        except Exception:
+            limit = 5
+        key = f"sess:{uid}"
+        raw = rds.lrange(key, 0, limit - 1)
+        lines = []
+        for item in raw:
+            msg = json.loads(html.unescape(item.decode()))
+            role = msg.get("role", "?")
+            content = msg.get("content")
+            if isinstance(content, dict):
+                tname = content.get("name")
+                if tname == "play_game":
+                    content = "(game move)"
+                elif tname == "generate_image":
+                    content = "(image)"
+                else:
+                    content = str(content.get("content") or "")
+            lines.append(f"[{role}] {content}")
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "get_history",
+                "content": "\n".join(lines) or "(empty conversation)",
+            },
+        })
+
     elif name == "edit_history":
         try:
             search_text = args.get("search_text", "")
             replacement_text = args.get("replacement_text", "")
             if not search_text:
                 print("edit_history: no search_text given, nothing to edit")
-                return
+                return "no_search"
 
             key = f"sess:{uid}"
             raw = rds.lrange(key, 0, -1)
@@ -686,7 +736,8 @@ async def handle_tool_call(uid, tc):
 
             if target is None:
                 print("edit_history: no assistant reply in this session to edit")
-                return
+                rds.publish(key, json.dumps({"type": "edit_error", "error": "there's no reply to edit yet"}))
+                return "no_target"
 
             i, msg = target
             old_content = msg["content"]
@@ -694,7 +745,8 @@ async def handle_tool_call(uid, tc):
                 # The model has to reproduce its own words exactly; when it
                 # misquotes by a character this is the only trace.
                 print(f"edit_history: {search_text!r} is not in the last reply, no edit made")
-                return
+                rds.publish(key, json.dumps({"type": "edit_error", "error": f"'{search_text}' isn't in the last reply"}))
+                return "not_found"
 
             new_content = old_content.replace(search_text, replacement_text)
             msg["content"] = new_content
@@ -702,8 +754,10 @@ async def handle_tool_call(uid, tc):
             event = json.dumps({"type": "edit_history", "old_text": old_content, "new_text": new_content})
             rds.publish(key, event)
             print(f"edit_history: rewrote {search_text!r} -> {replacement_text!r}")
+            return "ok"
         except Exception as e:
             print(f"Error processing edit_history tool: {e}")
+            return "error"
 
     elif name == "web_search":
         query = (args.get("query") or "").strip()
@@ -1038,6 +1092,18 @@ async def chat(data: dict):
                 else:
                     summarize(uid)
                 return JSONResponse({"res": True, "data": [], "uid": uid})
+            elif cmd == "edit":
+                # /edit <find> => <replace>: a pure server-side command,
+                # like /update and /delete. Runs the edit_history tool and
+                # stops - the model never sees it (its acknowledgement used
+                # to re-quote the edited text, which looked like a
+                # duplicated message) and it is not saved to the
+                # conversation.
+                tc, bad_usage = _slash_tool_call(cmd, parts)
+                if bad_usage or tc is None:
+                    return JSONResponse({"res": True, "data": [], "uid": uid})
+                await handle_tool_call(uid, tc)
+                return JSONResponse({"res": True, "data": [], "uid": uid})
             else:
                 # /search, /fetch, /img, /<game>: run one of the model's
                 # tools directly (the popup mirrors _slash_tool_call). The
@@ -1109,7 +1175,7 @@ async def chat(data: dict):
             # building the model context so the result composes with the
             # fetched pages and the game block exactly as a model-made call
             # would, and the model reads it on its first pass.
-            await handle_tool_call(uid, tool_cmd)
+            tool_status = await handle_tool_call(uid, tool_cmd)
             history = add_to_session(uid)
 
         # If the user linked any websites, hand the fetched pages to the model
@@ -1133,8 +1199,6 @@ async def chat(data: dict):
                     nudge = " It is the player's turn now - describe the board and what to do. Do not call the tool again until the player moves."
             elif tname == "generate_image":
                 nudge = " The image is ready - comment on it for the player."
-            elif tname == "edit_history":
-                nudge = " The player used /edit to change your last reply - acknowledge it briefly."
             else:
                 nudge = " Answer the player from that result now - do not call the tool again."
             model_history[-1]["content"] = (
