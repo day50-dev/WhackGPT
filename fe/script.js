@@ -1200,16 +1200,19 @@ searchInput.addEventListener('input', async () => {
 
 const hamburgerMenu = document.querySelector(".hamburger-menu");
 const sidebar = document.querySelector(".sidebar");
+const isMobile = () => window.matchMedia("(max-width: 768px)").matches;
 
 hamburgerMenu.addEventListener("click", () => {
   sidebar.classList.toggle("active");
-  hamburgerMenu.style.display = "none";
+  if (isMobile()) hamburgerMenu.style.display = "none";
 });
 
-// Close sidebar when clicking outside of it (e.g., on the chat area)
+// Close sidebar when clicking outside of it (e.g., on the chat area).
+// Only touch the hamburger on mobile - on desktop the sidebar is always
+// visible and the hamburger stays hidden (CSS display: none).
 document.querySelector(".chat-container").addEventListener("click", () => {
   sidebar.classList.remove("active");
-  hamburgerMenu.style.display = "block";
+  if (isMobile()) hamburgerMenu.style.display = "block";
 });
 
 init();
