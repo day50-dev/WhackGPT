@@ -679,6 +679,36 @@ _MOVE_HINT = {
 }
 
 
+def _turn_hint(st):
+    """Role-aware move hint: tells the model exactly what to do on its turn.
+    The old generic hint ("one word (your clue, or your guess)") left the
+    model unsure whether it was the clue-giver or the guesser, so it flailed
+    (even calling play_game with the game name as the move)."""
+    i = st["id"]
+    if i == "hangman":
+        return "guess a single letter (a-z)"
+    if i == "password":
+        if st["phase"] == "give" and st["giver"] == "model":
+            return 'give a one-word clue for "' + st["secret"] + '" (do NOT say the secret word itself)'
+        if st["phase"] == "guess" and st["giver"] != "model":
+            clue = st["clues"][-1] if st["clues"] else "(none)"
+            return "guess the secret word (the player's clue is \"" + clue + "\")"
+        return "one word (your clue, or your guess)"
+    if i == "taboo":
+        e = st["entry"]
+        if st["phase"] == "describe" and st["describer"] == "model":
+            return 'describe "' + e["word"] + '" (do NOT say: ' + ", ".join(e["taboo"]) + ")"
+        if st["phase"] == "guess" and st["describer"] != "model":
+            desc = st["clues"][-1] if st["clues"] else "(none)"
+            return "guess the word (the player's description is \"" + desc + "\")"
+        return "your description, or your one-word guess"
+    if i == "poker":
+        return "the card numbers (1-5) to swap, e.g. '2 4', or 'none'"
+    if i == "blackjack":
+        return "'hit' or 'stand'"
+    return "your move"
+
+
 def game_block(st):
     board = board_text(st)
     a = actor(st)
@@ -689,7 +719,7 @@ def game_block(st):
         if m.get("note"):
             s += " [" + m["note"] + "]"
         moves.append(s)
-    hint = _MOVE_HINT.get(st["id"], "your move")
+    hint = _turn_hint(st)
     if st.get("over"):
         turn = "Game over: " + st.get("result", "")
     elif a == "model":

@@ -987,63 +987,9 @@ textarea {
 }
 
 /* ---- games (JS game master renders the board into the chat) ---- */
-.game-modal {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.7);
-  z-index: 2000;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-}
-
-.game-modal.show {
-  display: flex;
-}
-
-.game-modal-content {
-  position: relative;
-  width: 100%;
-  max-width: 560px;
-  max-height: 85vh;
-  overflow-y: auto;
-}
-
-.game-modal-close {
-  position: absolute;
-  top: -0.75rem;
-  right: -0.75rem;
-  z-index: 1;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 50%;
-  border: 1px solid var(--border-color);
-  background: var(--sidebar-bg);
-  color: var(--text-primary);
-  font-size: 1.25rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.game-fab {
-  display: none;
-  position: fixed;
-  bottom: 6.5rem;
-  right: 1rem;
-  z-index: 1500;
-  width: 3rem;
-  height: 3rem;
-  border-radius: 50%;
-  border: 1px solid var(--border-color);
-  background: var(--sidebar-bg);
-  font-size: 1.5rem;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-}
-
-.game-fab.show {
-  display: block;
+.game-inline {
+  padding: 0.25rem 1rem;
+  max-width: 800px;
 }
 
 .game-board {

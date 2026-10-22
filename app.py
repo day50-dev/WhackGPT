@@ -660,11 +660,11 @@ async def handle_tool_call(uid, tc):
             rds.delete(f"game:{uid}")
         else:
             rds.set(f"game:{uid}", json.dumps(st))
-        # board + the move note: the note is the model's feedback on its own
-        # move (including "that was not a valid move" retries)
-        content = games.board_text(st)
-        if note:
-            content += "\n(move: " + note + ")"
+        # full game block (board + move log + the explicit "call the
+        # play_game tool" instruction). board_text alone said "YOUR turn"
+        # but never told the model to call the tool, so after a start/move
+        # the model stalled on "my turn" instead of playing.
+        content = games.game_block(st)
         add_to_session(uid, {
             "role": "assistant",
             "content": {
@@ -721,33 +721,32 @@ async def handle_tool_call(uid, tc):
             key = f"sess:{uid}"
             raw = rds.lrange(key, 0, -1)
 
-            # add_to_session lpushes, so index 0 is the newest message. The
-            # tool edits the most recent reply and only that one: searching
-            # further back used to silently rewrite an older message while
-            # the browser animated the newest bubble, so the UI showed an
-            # edit that had happened somewhere else. Image results are dicts,
-            # so skip past them to the last thing said in words.
+            # Search ALL assistant replies, newest first: the first one
+            # that contains the text to find is the target. (Limiting this
+            # to the newest reply made /edit useless for anything older
+            # than the last message.) The client mirrors this: it walks
+            # backwards through the bubbles until it finds the matching
+            # text, so the animation always plays on the message that was
+            # actually edited.
+            has_assistant = False
             target = None
             for i, item in enumerate(raw):
                 msg = json.loads(html.unescape(item.decode()))
                 if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
-                    target = (i, msg)
-                    break
+                    has_assistant = True
+                    if search_text in msg["content"]:
+                        target = (i, msg)
+                        break
 
             if target is None:
-                print("edit_history: no assistant reply in this session to edit")
-                rds.publish(key, json.dumps({"type": "edit_error", "error": "there's no reply to edit yet"}))
-                return "no_target"
+                if not has_assistant:
+                    rds.publish(key, json.dumps({"type": "edit_error", "error": "there's no reply to edit yet"}))
+                else:
+                    rds.publish(key, json.dumps({"type": "edit_error", "error": f"'{search_text}' isn't in any of my replies"}))
+                return "not_found"
 
             i, msg = target
             old_content = msg["content"]
-            if search_text not in old_content:
-                # The model has to reproduce its own words exactly; when it
-                # misquotes by a character this is the only trace.
-                print(f"edit_history: {search_text!r} is not in the last reply, no edit made")
-                rds.publish(key, json.dumps({"type": "edit_error", "error": f"'{search_text}' isn't in the last reply"}))
-                return "not_found"
-
             new_content = old_content.replace(search_text, replacement_text)
             msg["content"] = new_content
             rds.lset(key, i, json.dumps(msg))
@@ -1246,10 +1245,13 @@ async def chat(data: dict):
                         "started": False,
                     },
                 })
-            if model_history and model_history[-1].get("role") == "user":
-                model_history[-1]["content"] = (
-                    (model_history[-1].get("content") or "") + "\n\n" + games.game_block(st)
-                )
+            if model_history:
+                # the game block is the single place the model reads the
+                # board + whose turn it is + what move to make. Append it
+                # as its own message: the last message is often a usermove
+                # line (not a user message), so injecting into the user
+                # message would skip it and the model would stall.
+                model_history.append({"role": "user", "content": games.game_block(st)})
 
         async def generate():
             # Bounded tool loop: the model may call a tool (web_search,
