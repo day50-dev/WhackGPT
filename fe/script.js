@@ -994,6 +994,12 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     if (!hasThinking) {
       thinkingEl.remove();
     }
+    // If the text was cleared (e.g. a game move recovered from the model's
+    // raw tool-call text), the placeholder bubble is empty - remove it so only
+    // the game board remains.
+    if (!partialContent) {
+      assistantMsgEl.remove();
+    }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     maybeShowSurvey();
   }

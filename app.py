@@ -1123,7 +1123,11 @@ async def chat(data: dict):
                 if msg["role"] == "user" and (not original_text or msg["content"] == original_text):
                     msg["content"] = data["text"]
                     rds.lset(key, i, json.dumps(msg))
-                    rds.ltrim(key, 0, i)
+                    # re-run from the edited message: keep it and everything
+                    # older (indices i..end), drop the newer responses
+                    # (0..i-1). (ltrim(key, 0, i) did the opposite - it kept
+                    # the newer messages and deleted the older ones.)
+                    rds.ltrim(key, i, -1)
                     break
             history = add_to_session(uid)
             fetched_pages = ""
@@ -1332,7 +1336,35 @@ async def chat(data: dict):
                 if not tool_calls:
                     # Completed text, partial output, or the timeout message -
                     # finalize this turn.
-                    if ttlResponse:
+                    raw = rds.get(f"game:{uid}")
+                    st = json.loads(raw) if raw else None
+                    recovered = False
+                    if st and not st.get("over") and games.actor(st) == "model":
+                        # the model's turn: recover the move from its text,
+                        # or auto-pick one - so the game never stalls, even
+                        # if the model emits no text at all.
+                        move = (games.parse_model_move(st, ttlResponse) if ttlResponse else None) or games.auto_move(st)
+                        if move:
+                            note, _invalid = games.apply_move(st, move, "model")
+                            st["log"].append({"who": "model", "text": ttlResponse or "", "note": note})
+                            if st.get("over"):
+                                rds.delete(f"game:{uid}")
+                            else:
+                                rds.set(f"game:{uid}", json.dumps(st))
+                            yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
+                            add_to_session(uid, {
+                                "role": "assistant",
+                                "content": {
+                                    "tool_call_id": "textmove-" + str(int(time.time() * 1000)),
+                                    "role": "tool",
+                                    "name": "play_game",
+                                    "content": games.game_block(st),
+                                    "state": st,
+                                    "started": False,
+                                },
+                            })
+                            recovered = True
+                    if not recovered and ttlResponse:
                         add_to_session(uid, {"role": "assistant", "content": ttlResponse})
                     break
 

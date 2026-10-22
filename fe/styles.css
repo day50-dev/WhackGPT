@@ -703,6 +703,18 @@ textarea {
   gap: 0.25rem;
 }
 
+/* pencil + dice show only on hover (desktop); on touch devices (no hover)
+   they stay visible so they remain usable. */
+@media (hover: hover) {
+  .user-btn-group {
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .message-user:hover .user-btn-group {
+    opacity: 1;
+  }
+}
+
 .regen-btn,
 .edit-btn {
   display: inline-flex;

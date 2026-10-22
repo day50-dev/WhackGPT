@@ -309,6 +309,78 @@ def is_move(st, text, who):
     return False
 
 
+def parse_model_move(st, text):
+    """Extract a game move from the model's free text. Some models (the
+    current one, in particular) type their move as speech - "I'll guess the
+    letter 'E'" - instead of calling the play_game tool. This recovers the
+    move so the game keeps moving. Returns a move string, or None if nothing
+    parseable (the caller falls back to auto_move)."""
+    i = st["id"]
+    t = (text or "")
+    tl = t.lower()
+    if i == "hangman":
+        m = re.search(r"['\"]([a-zA-Z])['\"]", t)
+        if m:
+            return m.group(1).lower()
+        m = re.search(r"\b(?:letter|guess|going with|pick|picking)\b[^a-zA-Z]*([a-zA-Z])\b", tl)
+        if m:
+            return m.group(1).lower()
+        return None
+    if i == "blackjack":
+        if "stand" in tl or "stay" in tl:
+            return "stand"
+        if "hit" in tl:
+            return "hit"
+        return None
+    if i == "password":
+        m = re.search(r"['\"]([a-zA-Z]+)['\"]", t)
+        if m:
+            return m.group(1).lower()
+        return None
+    if i == "taboo":
+        m = re.search(r"['\"]([a-zA-Z][a-zA-Z ]*)['\"]", t)
+        if m:
+            return m.group(1).strip().lower()
+        return None
+    if i == "poker":
+        if any(w in tl for w in ("none", "keep", "no swap", "keep them", "keep all")):
+            return "none"
+        nums = re.findall(r"\b[1-5]\b", t)
+        if nums:
+            return " ".join(dict.fromkeys(nums))
+        return None
+    return None
+
+
+def auto_move(st):
+    """A guaranteed-valid move for the model, used when its text has no
+    parseable move - so the game never stalls on the model's turn. Fair by
+    default (never auto-guesses the secret in password/taboo)."""
+    i = st["id"]
+    if i == "hangman":
+        used = set(st.get("guessed", []))
+        avail = [c for c in "abcdefghijklmnopqrstuvwxyz" if c not in used]
+        return random.choice(avail) if avail else "z"
+    if i == "blackjack":
+        total = bj_total(st["model"])
+        return "hit" if total < 17 else "stand"
+    if i == "password":
+        if st["phase"] == "give" and st["giver"] == "model":
+            # a clue: the secret's first letter is a real (if weak) hint
+            return st["secret"][0]
+        words = [w for w in PASSWORD_WORDS if w != st["secret"]]
+        return random.choice(words) if words else st["secret"]
+    if i == "taboo":
+        e = st["entry"]
+        if st["phase"] == "describe" and st["describer"] == "model":
+            return "a word you could find in most homes"
+        words = [w["word"] for w in TABOO_WORDS if w["word"] != e["word"]]
+        return random.choice(words) if words else e["word"]
+    if i == "poker":
+        return "none"
+    return None
+
+
 # ---- the rules ----
 def apply_move(st, text, who):
     """Apply one move. Returns (note, invalid)."""
