@@ -386,8 +386,10 @@ function createNewChat() {
   window.location.hash = "";
   _setCookieUid(""); // drop the stale uid cookie
   const keepDong = localStorage.getItem("whackdong"); // wallet survives the wipe
+  const keepSurvey = localStorage.getItem("whacksurveydone"); // answered flag survives too
   localStorage.clear();
   if (keepDong !== null) localStorage.setItem("whackdong", keepDong);
+  if (keepSurvey !== null) localStorage.setItem("whacksurveydone", keepSurvey);
   activeGame = null;
   clearMessages();
   updateGamePlaceholder();
@@ -1310,6 +1312,7 @@ surveyButtons.addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
   const rating = btn.dataset.rating;
+  localStorage.setItem("whacksurveydone", "1"); // answered once - never ask again
   surveyButtons.style.display = 'none';
   surveyThanks.textContent = `Thank you! Your feedback of "${labels[rating - 1]} satisfied" has been submitted.`;
   surveyThanks.classList.add('show');
@@ -1324,6 +1327,7 @@ surveyButtons.addEventListener('click', (e) => {
 let _surveyCount = 0;
 
 function maybeShowSurvey() {
+  if (localStorage.getItem("whacksurveydone")) return; // already answered - don't bug them again
   _surveyCount++;
   if (_surveyCount !== 2) return;
   surveyOverlay.classList.add('open');
