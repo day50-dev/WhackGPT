@@ -400,35 +400,6 @@ _REWRITE_INSTRUCTIONS = {
     ("sincere", "less"): "Rewrite this response to be much more jokey, playful and full of puns and silliness. Keep the same topic and roughly the same length.",
 }
 
-def rewrite_response(text, metric, direction):
-    """Rewrite one assistant reply to lean more/less on a metric, in a fresh
-    isolated context (not the conversation history). Returns the rewritten
-    text, or None on any failure. Runs the model, so it must be called off
-    the event loop."""
-    instruction = _REWRITE_INSTRUCTIONS.get((metric, direction))
-    if not instruction or not text or not text.strip():
-        return None
-    messages = [
-        {"role": "system", "content": "You are rewriting one of your own previous responses. Follow the instruction precisely. Keep the same topic, voice and roughly the same length. Return ONLY the rewritten text - no preamble, no quotes, no explanation."},
-        {"role": "user", "content": f"Response to rewrite:\n\"\"\"\n{text}\n\"\"\"\n\nInstruction: {instruction}"},
-    ]
-    try:
-        import httpx
-        headers = {
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost",
-            "X-Title": "WhackGPT"
-        }
-        payload = {"model": _model, "messages": messages}
-        response = httpx.post(f"{DYVA_API_BASE}/chat/completions", json=payload, headers=headers, timeout=180.0)
-        result = response.json()
-        newtext = result["choices"][0]["message"]["content"]
-        return (newtext or "").strip() or None
-    except Exception as e:
-        print(f"Error rewriting response: {e}")
-        return None
-
-
 @app.post("/rewrite")
 async def rewrite(data: dict):
     text = (data.get("text") or "").strip()
@@ -436,11 +407,29 @@ async def rewrite(data: dict):
     direction = data.get("direction")
     if not text or metric not in ("dangerous", "coherent", "sincere") or direction not in ("more", "less"):
         return JSONResponse({"error": "bad request"}, status_code=400)
-    newtext = await asyncio.to_thread(rewrite_response, text, metric, direction)
-    if not newtext:
-        return JSONResponse({"error": "rewrite failed"}, status_code=500)
-    ratings = await asyncio.to_thread(rate_response, newtext)
-    return JSONResponse({"text": newtext, "ratings": ratings})
+    instruction = _REWRITE_INSTRUCTIONS[(metric, direction)]
+    messages = [
+        {"role": "system", "content": "You are rewriting one of your own previous responses. Follow the instruction precisely. Keep the same topic, voice and roughly the same length. Return ONLY the rewritten text - no preamble, no quotes, no explanation."},
+        {"role": "user", "content": f"Response to rewrite:\n\"\"\"\n{text}\n\"\"\"\n\nInstruction: {instruction}"},
+    ]
+    async def generate():
+        full = ""
+        try:
+            async for chunk in openrouter_stream(_model, messages):
+                choices = chunk.get("choices", [])
+                if not choices:
+                    continue
+                content = choices[0].get("delta", {}).get("content", "") or ""
+                if content:
+                    full += content
+                    yield f"data: {json.dumps({'t': content})}\n\n"
+            # After the text is complete, re-score it so the bars can update.
+            ratings = await asyncio.to_thread(rate_response, full)
+            yield f"data: {json.dumps({'done': True, 'ratings': ratings})}\n\n"
+        except Exception as e:
+            print(f"Error in rewrite stream: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 # we don't need to maintain separate keys or do any extra

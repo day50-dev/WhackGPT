@@ -487,6 +487,32 @@ table {
   color: #ff5c5c;
 }
 
+/* Spinner + status text shown while the rating model scores ("Scoring...")
+   or the more/less buttons rewrite the reply ("Rewriting..."). */
+.scoring-indicator,
+.rewrite-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+.scoring-spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: whackspin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes whackspin {
+  to { transform: rotate(360deg); }
+}
+
 /* The 🤖 in the edit animation: 2x text size, but the box is capped so
    the line height doesn't balloon - the glyph overflows the box instead
    of stretching the line. */
