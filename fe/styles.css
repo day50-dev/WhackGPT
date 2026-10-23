@@ -1032,9 +1032,6 @@ textarea {
     overflow-x: hidden; /* Prevent horizontal scrollbar */
   }
 
-  .input-area {
-    height: 11rem;
-  }
   .hamburger-menu {
     display: block;
     position: absolute;
