@@ -623,6 +623,12 @@ function renderMessages(messages, doClear) {
       messageEl.appendChild(speakBtn);
     }
 
+    // Persisted ratings (from a page refresh / history load): the judge
+    // already scored this reply, so show the bars under the text.
+    if (msg.role === 'assistant' && msg.ratings) {
+      content.appendChild(ratingsBar(msg.ratings));
+    }
+
     messagesContainer.appendChild(messageEl);
   });
 
@@ -775,6 +781,12 @@ function set_context(what) {
     }
     if (message.type === 'edit_history') {
       handleEditHistory(message.old_text, message.new_text);
+      return;
+    }
+    if (message.type === 'ratings') {
+      // A background judge just scored one of the assistant replies. Find the
+      // matching bubble (newest first) and show the bars under it.
+      attachRatings(message.text, message.ratings);
       return;
     }
     if (message.role === 'user') {
@@ -1127,6 +1139,69 @@ function handleEditHistory(oldText, newText) {
     }
   }
   deleteStep();
+}
+
+// ---- response ratings (System One noul metrics) ----
+// Three bars in one row under an assistant reply, each ~1/3 width, showing
+// the probability of TRUE (0-100%) for dangerous / coherent / sincere.
+const RATING_METRICS = [
+  { key: "dangerous", label: "dangerous", color: "#ff5c5c" },
+  { key: "coherent", label: "coherent", color: "#4cc9f0" },
+  { key: "sincere", label: "sincere", color: "#7bd88f" },
+];
+
+function ratingsBar(scores) {
+  const row = document.createElement("div");
+  row.className = "ratings-row";
+  row.title = "auto-rated by a judge model";
+  for (const m of RATING_METRICS) {
+    const pct = Math.max(0, Math.min(1, scores[m.key] || 0)) * 100;
+    const cell = document.createElement("div");
+    cell.className = "rating-cell";
+    const label = document.createElement("span");
+    label.className = "rating-label";
+    label.textContent = m.label;
+    const track = document.createElement("div");
+    track.className = "rating-track";
+    const fill = document.createElement("div");
+    fill.className = "rating-fill";
+    fill.style.width = pct.toFixed(1) + "%";
+    fill.style.background = m.color;
+    track.appendChild(fill);
+    const num = document.createElement("span");
+    num.className = "rating-num";
+    num.textContent = Math.round(pct) + "%";
+    cell.appendChild(label);
+    cell.appendChild(track);
+    cell.appendChild(num);
+    row.appendChild(cell);
+  }
+  return row;
+}
+
+// Find the assistant bubble whose text matches (newest first, markdown
+// normalized) and attach the bars beneath it. Idempotent: a re-score
+// replaces the existing row rather than stacking.
+function attachRatings(text, scores) {
+  if (!text || !scores) return;
+  const norm = (s) => (s || "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_#`>~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const o = norm(text);
+  const msgs = [...document.querySelectorAll(".message-assistant .message-content")];
+  let target = null;
+  for (let k = msgs.length - 1; k >= 0; k--) {
+    const el = msgs[k];
+    if (!el || el.querySelector('img')) continue;
+    const t = norm(el.textContent);
+    if (t === o || (o.length >= 20 && t.startsWith(o.slice(0, 40)))) { target = el; break; }
+  }
+  if (!target) return; // never attach to the wrong bubble
+  const existing = target.querySelector(".ratings-row");
+  if (existing) existing.remove();
+  target.appendChild(ratingsBar(scores));
 }
 
 const surveyOverlay = document.getElementById('surveyOverlay');
