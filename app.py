@@ -28,7 +28,7 @@ rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
 _topicTs = "convos_ts"
-_model = "blit"
+_model = "blit*27"
 
 # Fire-and-forget work (e.g. titling a new chat) must not delay the response
 # stream. Keep a strong ref so the task isn't garbage collected mid-flight.
@@ -560,11 +560,11 @@ _KNOWN_TOOLS = {"generate_image", "edit_history", "get_history", "play_game", "w
 
 
 def _parse_arg_block(argstr):
-    """Parse a model-emitted arg block like "key:'value',key2:value2" into a
-    dict. Values may be single-quoted or bare (numbers). Keys are unquoted
-    identifiers. Tolerates the inconsistent formats the model produces."""
+    """Parse a model-emitted arg block into a dict. Tolerates the formats the
+    model produces: key:value, key='value', key="value", key=value (braces or
+    parens). Values may be quoted or bare (numbers)."""
     args = {}
-    for m in re.finditer(r"([a-zA-Z_]+)\s*:\s*('(?:[^']*)'|\"(?:[^\"]*)\"|[^,]+)", argstr):
+    for m in re.finditer(r"([a-zA-Z_]+)\s*[:=]\s*('(?:[^']*)'|\"(?:[^\"]*)\"|[^,)]+)", argstr):
         key = m.group(1)
         val = m.group(2).strip()
         if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
@@ -573,22 +573,45 @@ def _parse_arg_block(argstr):
     return args
 
 
+# Matches a tool call the model writes as text, in any of the formats it uses:
+#   model_call:edit_history{...}   call:name{...}   name{...}   name(...)
+_TEXT_CALL_RE = re.compile(
+    r"(?:(?:model_)?call:)?([a-zA-Z_]+)\s*(?:\{([^}]*)\}|\(([^)]*)\))"
+)
+
+
 def _extract_text_tool_calls(text):
     """Some models (the current one, in particular) emit tool calls as text
-    instead of structured tool_calls, e.g.
-    "model_call:edit_history{search_text:'a',replacement_text:'b'}" or
-    "model_call:get_history{limit:5}". Parse them so they can be executed
-    (and the raw text suppressed). Returns [(name, args_dict)] for known
-    tools only."""
-    calls = []
+    instead of structured tool_calls - in several formats:
+    "model_call:edit_history{search_text:'a',replacement_text:'b'}",
+    "get_history{limit:5}", "web_search(query=foo)", or a bare tool name on
+    its own line ("edit_history"). Parse them so they can be executed and the
+    raw text suppressed. Returns (calls, cleaned) where calls is
+    [(name, args_dict)] for known tools and cleaned is the text with every
+    tool-call token removed."""
     if not text:
-        return calls
-    for m in re.finditer(r"(?:model_)?call:([a-zA-Z_]+)\s*\{([^}]*)\}", text):
+        return [], ""
+    calls = []
+
+    def _repl(m):
         name = m.group(1)
         if name not in _KNOWN_TOOLS:
+            return m.group(0)
+        argstr = m.group(2) if m.group(2) is not None else (m.group(3) or "")
+        calls.append((name, _parse_arg_block(argstr)))
+        return ""
+
+    cleaned = _TEXT_CALL_RE.sub(_repl, text)
+    # bare tool names on their own line (no args)
+    out_lines = []
+    for line in cleaned.split("\n"):
+        s = line.strip()
+        if s in _KNOWN_TOOLS:
+            calls.append((s, {}))
             continue
-        calls.append((name, _parse_arg_block(m.group(2))))
-    return calls
+        out_lines.append(line)
+    cleaned = "\n".join(out_lines).strip()
+    return calls, cleaned
 
 
 async def handle_tool_call(uid, tc):
@@ -1376,12 +1399,25 @@ async def chat(data: dict):
                     raw = rds.get(f"game:{uid}")
                     st = json.loads(raw) if raw else None
                     recovered = False
-                    # 1. the model may emit tool calls as text (model_call:...)
-                    #    instead of structured tool_calls - execute them and
+                    # 1. the model may emit tool calls as text (model_call:...,
+                    #    name{...}, name(...), or a bare tool name) instead of
+                    #    structured tool_calls - execute the ones we can and
                     #    suppress the raw text.
-                    text_calls = _extract_text_tool_calls(ttlResponse) if ttlResponse else []
-                    if text_calls:
-                        for name, args in text_calls:
+                    if ttlResponse:
+                        text_calls, cleaned = _extract_text_tool_calls(ttlResponse)
+                    else:
+                        text_calls, cleaned = [], ""
+                    executable = []
+                    for name, args in text_calls:
+                        # never run edit_history with missing args (an empty
+                        # search_text would match and wipe the newest reply)
+                        if name == "edit_history" and not (args.get("search_text") and args.get("replacement_text")):
+                            continue
+                        if name == "get_history" and not args:
+                            args = {"limit": "5"}
+                        executable.append((name, args))
+                    if executable:
+                        for name, args in executable:
                             tc = {
                                 "id": "textcall-" + str(int(time.time() * 1000)),
                                 "type": "function",
@@ -1389,6 +1425,11 @@ async def chat(data: dict):
                             }
                             await handle_tool_call(uid, tc)
                         yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
+                        recovered = True
+                    elif cleaned and cleaned != ttlResponse:
+                        # only non-executable tokens were found - save the
+                        # cleaned text (tool-call tokens stripped)
+                        add_to_session(uid, {"role": "assistant", "content": cleaned})
                         recovered = True
                     # 2. game: the model's turn - recover the move from its text
                     #    (or auto-pick one) so the game never stalls, even if
