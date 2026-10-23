@@ -1232,10 +1232,12 @@ def _format_search_results(results):
     return "\n\n".join(lines) + "\n\n(call web_fetch with a URL above to read one in full)"
 
 
-def keenable_search(query, max_results=8):
-    """One JSON POST to Keenable's keyless public endpoint and a parse. The
-    keyless endpoint wants a caller title, hence the X-Keenable-Title header.
-    Honors a 429 Retry-After and retries once; a second 429 is surfaced."""
+def keenable_search_raw(query, max_results=8):
+    """Return the raw search results as [{title, url, snippet}] (or an error
+    string on failure). Shared by keenable_search (formats them) and the
+    references feature (cites them). The keyless endpoint wants a caller
+    title, hence the X-Keenable-Title header. Honors a 429 Retry-After and
+    retries once; a second 429 is surfaced."""
     if not _web_search_throttle():
         return "web search is rate-limited, try again in a moment"
     payload = {"query": query, "max_results": max(1, min(int(max_results or 8), 8)), "mode": "pro"}
@@ -1262,8 +1264,92 @@ def keenable_search(query, max_results=8):
             obj = resp.json()
         except Exception as e:
             return f"web search error: bad JSON: {e}"
-        return _format_search_results(_parse_keenable(obj))
+        return _parse_keenable(obj)
     return "web search rate-limited (429)"
+
+
+def keenable_search(query, max_results=8):
+    """One JSON POST to Keenable's keyless public endpoint and a parse."""
+    results = keenable_search_raw(query, max_results)
+    if isinstance(results, str):  # an error / rate-limit message
+        return results
+    return _format_search_results(results)
+
+
+def _solicit_reference_choice(text):
+    """Ask the model whether to provide scholarly references (real web links)
+    for the topic. Returns (choice, query) where choice is 'web search' | 'use
+    links' | 'no links'. 'no links' is a valid answer (skip)."""
+    prompt = (
+        "For the following response, decide whether to provide scholarly "
+        "references (real web links) for the topic. Choose exactly one of: "
+        '"web search", "use links", or "no links". '
+        '"web search" = the topic warrants a web search for references. '
+        '"use links" = use links (treat like web search). '
+        '"no links" = no references needed. '
+        "If you choose \"web search\" or \"use links\", also provide a search "
+        "query for the topic.\n\n"
+        'Respond with ONLY JSON: {"choice": "...", "query": "..."}\n\n'
+        f"Response:\n\"\"\"\n{text[:2000]}\n\"\"\""
+    )
+    try:
+        response = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
+            "model": _model,
+            "messages": [{"role": "user", "content": prompt}],
+        }, headers={"Content-Type": "application/json"}, timeout=60.0)
+        result = response.json()
+        content = result["choices"][0]["message"]["content"]
+        m = re.search(r'\{.*\}', content, re.DOTALL)
+        if m:
+            data = json.loads(m.group(0))
+            choice = data.get("choice", "no links")
+            query = (data.get("query") or "").strip()
+            if choice not in ("web search", "use links", "no links"):
+                choice = "no links"
+            return choice, query
+        return "no links", ""
+    except Exception as e:
+        print(f"Error soliciting reference choice: {e}")
+        return "no links", ""
+
+
+def solicit_references(uid, text):
+    """After a reply, in the background, solicit scholarly references (real web
+    links) for the topic - a fun contrast with the absurd advice. The model can
+    pick 'no links' (a valid answer) to skip. Saves them on the message +
+    publishes a live event so the open chat can attach without a refresh."""
+    choice, query = _solicit_reference_choice(text)
+    if choice == "no links" or not query:
+        return
+    results = keenable_search_raw(query, 3)
+    if not isinstance(results, list) or not results:
+        return  # no results (or an error) - no references
+    from urllib.parse import urlparse
+    year = time.strftime("%Y")
+    citations = []
+    for r in results:
+        domain = urlparse(r["url"]).netloc or r["url"]
+        title = r["title"] or domain
+        citations.append(f'\u201c{title}.\u201d {domain}, {year}. {r["url"]}')
+    refs = {"citations": citations}
+    # Save on the stored message (by text match, newest first).
+    key = f"sess:{uid}"
+    raw = rds.lrange(key, 0, -1)
+    for i, item in enumerate(raw):
+        try:
+            msg = json.loads(item.decode())
+        except Exception:
+            continue
+        if msg.get("role") == "assistant" and msg.get("content") == text:
+            msg["references"] = refs
+            rds.lset(key, i, json.dumps(msg))
+            break
+    # Publish a live event (so the open chat can attach without a refresh).
+    rds.publish(f"sess:{uid}", json.dumps({
+        "type": "references",
+        "text": text,
+        "references": refs,
+    }))
 
 
 def web_backend():
@@ -1712,6 +1798,7 @@ async def chat(data: dict):
                         # metrics) - the bars appear under the message when
                         # done. Off the loop: it's a blocking model call.
                         run_in_background(rate_and_attach, uid, ttlResponse)
+                        run_in_background(solicit_references, uid, ttlResponse)
                         run_in_background(ensure_title, uid)
                     break
 
@@ -1766,6 +1853,7 @@ async def chat(data: dict):
                             _msg["reasoning"] = allReasoning
                         add_to_session(uid, _msg)
                         run_in_background(rate_and_attach, uid, final_text)
+                        run_in_background(solicit_references, uid, final_text)
                         run_in_background(ensure_title, uid)
                     break
 

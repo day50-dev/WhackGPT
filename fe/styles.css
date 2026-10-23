@@ -487,6 +487,43 @@ table {
   color: #ff5c5c;
 }
 
+/* Scholarly "References" block (real web links), shown between the reply
+   text and the rating bars. A deadpan, citation-style look. */
+.references-block {
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-color);
+}
+.references-header {
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+}
+.references-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.references-item {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+.references-item a {
+  color: var(--primary);
+  text-decoration: none;
+  word-break: break-all;
+}
+.references-item a:hover {
+  text-decoration: underline;
+}
+
 /* Spinner + status text shown while the rating model scores ("Scoring...")
    or the more/less buttons rewrite the reply ("Rewriting..."). */
 .scoring-indicator,
