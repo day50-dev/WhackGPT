@@ -385,6 +385,64 @@ def rate_and_attach(uid, text):
     rds.publish(key, json.dumps({"type": "ratings", "text": text, "ratings": scores}))
 
 
+# ---- response rewrite (more/less metric buttons) ----
+# The more/less buttons on the rating bars rewrite the existing reply in a
+# fresh, isolated context (not the conversation history): the original reply
+# is passed to the model with an instruction to lean more/less on the metric.
+# The result replaces the reply text, and the reply is re-scored so the bars
+# update live (they stay on screen the whole time).
+_REWRITE_INSTRUCTIONS = {
+    ("dangerous", "more"): "Rewrite this response to make it much more dangerous, risky and reckless. Keep the same topic, voice and roughly the same length.",
+    ("dangerous", "less"): "Rewrite this response to make it much safer, more sensible and reasonable. Keep the same topic, voice and roughly the same length.",
+    ("coherent", "more"): "Rewrite this response to make it much more logical and plausible. Keep the same topic, voice and roughly the same length.",
+    ("coherent", "less"): "Rewrite this response to make it much more nonsensical and wildly implausible. Keep the same topic, voice and roughly the same length.",
+    ("sincere", "more"): "Rewrite this response to be much more direct, frank and helpful, with no jokes or puns. Keep the same topic and roughly the same length.",
+    ("sincere", "less"): "Rewrite this response to be much more jokey, playful and full of puns and silliness. Keep the same topic and roughly the same length.",
+}
+
+def rewrite_response(text, metric, direction):
+    """Rewrite one assistant reply to lean more/less on a metric, in a fresh
+    isolated context (not the conversation history). Returns the rewritten
+    text, or None on any failure. Runs the model, so it must be called off
+    the event loop."""
+    instruction = _REWRITE_INSTRUCTIONS.get((metric, direction))
+    if not instruction or not text or not text.strip():
+        return None
+    messages = [
+        {"role": "system", "content": "You are rewriting one of your own previous responses. Follow the instruction precisely. Keep the same topic, voice and roughly the same length. Return ONLY the rewritten text - no preamble, no quotes, no explanation."},
+        {"role": "user", "content": f"Response to rewrite:\n\"\"\"\n{text}\n\"\"\"\n\nInstruction: {instruction}"},
+    ]
+    try:
+        import httpx
+        headers = {
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost",
+            "X-Title": "WhackGPT"
+        }
+        payload = {"model": _model, "messages": messages}
+        response = httpx.post(f"{DYVA_API_BASE}/chat/completions", json=payload, headers=headers, timeout=180.0)
+        result = response.json()
+        newtext = result["choices"][0]["message"]["content"]
+        return (newtext or "").strip() or None
+    except Exception as e:
+        print(f"Error rewriting response: {e}")
+        return None
+
+
+@app.post("/rewrite")
+async def rewrite(data: dict):
+    text = (data.get("text") or "").strip()
+    metric = data.get("metric")
+    direction = data.get("direction")
+    if not text or metric not in ("dangerous", "coherent", "sincere") or direction not in ("more", "less"):
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    newtext = await asyncio.to_thread(rewrite_response, text, metric, direction)
+    if not newtext:
+        return JSONResponse({"error": "rewrite failed"}, status_code=500)
+    ratings = await asyncio.to_thread(rate_response, newtext)
+    return JSONResponse({"text": newtext, "ratings": ratings})
+
+
 # we don't need to maintain separate keys or do any extra
 # cleanup AND we can simply return it with everything else.
 def initialize_session(context, model):

@@ -1049,9 +1049,13 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     }
     // If the text was cleared (e.g. a game move recovered from the model's
     // raw tool-call text), the placeholder bubble is empty - remove it so only
-    // the game board remains.
+    // the game board remains. Otherwise the reply is final - show the
+    // "Scoring..." indicator while the rating model works (the bars replace
+    // it when they arrive).
     if (!partialContent) {
       assistantMsgEl.remove();
+    } else {
+      showScoring(assistantMsgEl.querySelector(".message-content"));
     }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     maybeShowSurvey();
@@ -1161,25 +1165,6 @@ const RATING_METRICS = [
   { key: "sincere", label: "sincere", color: "#7bd88f" },
 ];
 
-// Sidechannel instructions for the more/less buttons. Clicking "more
-// <metric>" re-issues the prompt telling the model to lean more toward that
-// metric; "less <metric>" leans away. Appended to the user message (the
-// system prompt tells the model to always follow sidechannel lines).
-const SIDECHANNEL_INSTRUCTIONS = {
-  dangerous: {
-    more: "sidechannel: make the advice very dangerous, risky and thoughtless",
-    less: "sidechannel: make the advice reasonable, sensible and safe",
-  },
-  coherent: {
-    more: "sidechannel: make the advice logical and plausible",
-    less: "sidechannel: make the advice nonsensical and wildly implausible",
-  },
-  sincere: {
-    more: "sidechannel: be direct and frank, try to be helpful, no jokes or puns",
-    less: "sidechannel: be jokey, use puns and silliness",
-  },
-};
-
 function ratingsBar(scores) {
   const row = document.createElement("div");
   row.className = "ratings-row";
@@ -1205,12 +1190,12 @@ function ratingsBar(scores) {
     lessBtn.className = "rating-btn less";
     lessBtn.textContent = "less";
     lessBtn.title = "Re-issue, less " + m.label;
-    lessBtn.addEventListener("click", () => sidechannelAdjust(m.key, "less", lessBtn));
+    lessBtn.addEventListener("click", () => rewriteMetric(m.key, "less", lessBtn));
     const moreBtn = document.createElement("button");
     moreBtn.className = "rating-btn more";
     moreBtn.textContent = "more";
     moreBtn.title = "Re-issue, more " + m.label;
-    moreBtn.addEventListener("click", () => sidechannelAdjust(m.key, "more", moreBtn));
+    moreBtn.addEventListener("click", () => rewriteMetric(m.key, "more", moreBtn));
     const numRow = document.createElement("div");
     numRow.className = "rating-numrow";
     numRow.appendChild(lessBtn);
@@ -1224,43 +1209,86 @@ function ratingsBar(scores) {
   return row;
 }
 
-// Re-issue the prompt that produced this reply, with a sidechannel
-// instruction telling the model to lean more/less on the metric. Finds the
-// user message that precedes the rated reply, strips any prior sidechannel,
-// appends the new one, and re-runs via the edit mechanism (which updates
-// the user message, truncates the session, and re-issues the turn).
-function sidechannelAdjust(metric, direction, btn) {
+// Get just the reply text from a message content element (excluding the
+// rating bar and the "Scoring..." indicator, which are separate children).
+function getReplyText(contentEl) {
+  const clone = contentEl.cloneNode(true);
+  clone.querySelectorAll(".ratings-row, .scoring-indicator").forEach(el => el.remove());
+  return (clone.textContent || "").trim();
+}
+
+// Replace the reply text in a content element, keeping the rating bar
+// visible (it's preserved, not reset). The "Scoring..." indicator is dropped.
+function replaceTextPreservingBars(contentEl, newText) {
+  const bars = contentEl.querySelector(".ratings-row");
+  [...contentEl.children].forEach(child => {
+    if (child !== bars) child.remove();
+  });
+  contentEl.insertAdjacentHTML("afterbegin", format(newText));
+}
+
+// Update an existing rating bar in place (the fills animate via the CSS
+// width transition). If there's no bar yet, add one.
+function updateRatingsInPlace(target, scores) {
+  const row = target.querySelector(".ratings-row");
+  if (!row) { target.appendChild(ratingsBar(scores)); return; }
+  RATING_METRICS.forEach((m, i) => {
+    const cell = row.children[i];
+    if (!cell) return;
+    const pct = Math.max(0, Math.min(100, (scores[m.key] || 0) * 100));
+    const fill = cell.querySelector(".rating-fill");
+    const num = cell.querySelector(".rating-num");
+    if (fill) fill.style.width = pct.toFixed(1) + "%";
+    if (num) num.textContent = Math.round(pct) + "%";
+  });
+}
+
+// Rewrite the rated reply in place: pass the current text to /rewrite (a fresh
+// isolated context, not the conversation), replace the text (keeping the bars
+// visible the whole time), and update the bars to the new scores when the
+// rewrite + re-score come back. The user watches the bars move live.
+async function rewriteMetric(metric, direction, btn) {
   const assistantMsg = btn.closest(".message");
   if (!assistantMsg) return;
-  // Find the user message that precedes this reply (search backwards).
-  let prev = assistantMsg.previousElementSibling;
-  let userMsg = null;
-  while (prev) {
-    if (prev.classList.contains("message-user")) { userMsg = prev; break; }
-    prev = prev.previousElementSibling;
-  }
-  if (!userMsg) return;
-  const contentEl = userMsg.querySelector(".message-content");
+  const contentEl = assistantMsg.querySelector(".message-content");
   if (!contentEl) return;
-  const raw = (contentEl.textContent || "").trim();
+  const raw = getReplyText(contentEl);
   if (!raw) return;
-  // Strip any prior sidechannel instruction, then append the new one.
-  const clean = raw.replace(/\s*sidechannel:[\s\S]*$/i, "").trim();
-  const inst = SIDECHANNEL_INSTRUCTIONS[metric] && SIDECHANNEL_INSTRUCTIONS[metric][direction];
-  if (!clean || !inst) return;
-  // Remove everything after the user message (the rated reply and any later
-  // turns) so the new reply doesn't stack on the old.
-  let next = userMsg.nextElementSibling;
-  while (next) {
-    const toRemove = next;
-    next = next.nextElementSibling;
-    toRemove.remove();
+  const buttons = contentEl.querySelectorAll(".rating-btn");
+  buttons.forEach(b => { b.disabled = true; b.style.opacity = "0.5"; });
+  try {
+    const res = await fetch("/rewrite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: raw, metric, direction }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.text) throw new Error(data.error || "rewrite failed");
+    replaceTextPreservingBars(contentEl, data.text);
+    if (data.ratings) updateRatingsInPlace(contentEl, data.ratings);
+  } catch (e) {
+    snackbar("Rewrite failed — try again");
+  } finally {
+    buttons.forEach(b => { b.disabled = false; b.style.opacity = ""; });
   }
-  // Re-issue via the edit mechanism: pass the specific user message's text
-  // (raw, incl. any prior sidechannel) so the server matches this exact
-  // message (not just the most recent one), updates it (with the new
-  // sidechannel), truncates the session, and re-runs the turn.
-  sendMessage(clean + " " + inst, false, true, raw);
+}
+
+// Show a "Scoring..." indicator below the assistant text while the rating
+// model is working. Replaced by the rating bars when they arrive; auto-
+// removed after 15s if no rating comes (e.g. the judge model failed).
+function showScoring(contentEl) {
+  if (!contentEl) return;
+  removeScoring(contentEl); // avoid duplicates
+  const el = document.createElement("div");
+  el.className = "scoring-indicator";
+  el.innerHTML = '<span class="scoring-spinner"></span>Scoring...';
+  contentEl.appendChild(el);
+  setTimeout(() => removeScoring(contentEl), 15000);
+}
+function removeScoring(contentEl) {
+  if (!contentEl) return;
+  const el = contentEl.querySelector(".scoring-indicator");
+  if (el) el.remove();
 }
 
 // Find the assistant bubble whose text matches (newest first, markdown
@@ -1298,6 +1326,7 @@ function attachRatings(text, scores) {
   }
   console.log("[ratings] attach ->", target ? "found" : "NO BUBBLE", "| scores:", JSON.stringify(scores));
   if (!target) return;
+  removeScoring(target); // swap the "Scoring..." indicator for the real bars
   const existing = target.querySelector(".ratings-row");
   if (existing) existing.remove();
   target.appendChild(ratingsBar(scores));
