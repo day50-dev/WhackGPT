@@ -483,7 +483,7 @@ def summarize(uid, summary=None):
                 x.get("content")
                 for x in filter(
                     lambda x: x.get("role") == "user",
-                    [json.loads(x) for x in rds.lrange(f"sess:{uid}", 0, -3)],
+                    [json.loads(x) for x in rds.lrange(f"sess:{uid}", 0, -1)],
                 )
             ])
             summary = generate_summary(history)
@@ -1566,6 +1566,8 @@ async def chat(data: dict):
             # model that keeps calling tools can't loop forever.
             history = model_history
             ran_tools = set()  # (name, args) already run this turn
+            allReasoning = ''  # thinking tokens across all passes (saved so they
+                              # persist across a refresh, matching the live block)
             if tool_cmd:
                 try:
                     _a = json.loads(tool_cmd["function"]["arguments"] or "{}")
@@ -1607,6 +1609,8 @@ async def chat(data: dict):
                                 reasoning = delta.get("reasoning_content", "") or delta.get("reasoning", "") or ""
                                 if content:
                                     ttlResponse += content
+                                if reasoning:
+                                    allReasoning += reasoning
                                 if content or reasoning:
                                     emitted = True
 
@@ -1700,7 +1704,10 @@ async def chat(data: dict):
                             recovered = True
                     # 3. save the text (if nothing was recovered).
                     if not recovered and ttlResponse:
-                        add_to_session(uid, {"role": "assistant", "content": ttlResponse})
+                        _msg = {"role": "assistant", "content": ttlResponse}
+                        if allReasoning:
+                            _msg["reasoning"] = allReasoning
+                        add_to_session(uid, _msg)
                         # rate the reply in the background (System One noul
                         # metrics) - the bars appear under the message when
                         # done. Off the loop: it's a blocking model call.
@@ -1754,7 +1761,10 @@ async def chat(data: dict):
                     except Exception as e:
                         print(f"forced final pass failed: {type(e).__name__}: {e}")
                     if final_text:
-                        add_to_session(uid, {"role": "assistant", "content": final_text})
+                        _msg = {"role": "assistant", "content": final_text}
+                        if allReasoning:
+                            _msg["reasoning"] = allReasoning
+                        add_to_session(uid, _msg)
                         run_in_background(rate_and_attach, uid, final_text)
                         run_in_background(ensure_title, uid)
                     break
