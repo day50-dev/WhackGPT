@@ -554,6 +554,43 @@ def filter_tools(ll):
             continue
     return cleaned
 
+# Tools the model is allowed to invoke. Used to guard the text-tool-call
+# parser so a made-up tool name in the model's text is never executed.
+_KNOWN_TOOLS = {"generate_image", "edit_history", "get_history", "play_game", "web_search", "web_fetch"}
+
+
+def _parse_arg_block(argstr):
+    """Parse a model-emitted arg block like "key:'value',key2:value2" into a
+    dict. Values may be single-quoted or bare (numbers). Keys are unquoted
+    identifiers. Tolerates the inconsistent formats the model produces."""
+    args = {}
+    for m in re.finditer(r"([a-zA-Z_]+)\s*:\s*('(?:[^']*)'|\"(?:[^\"]*)\"|[^,]+)", argstr):
+        key = m.group(1)
+        val = m.group(2).strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+            val = val[1:-1]
+        args[key] = val
+    return args
+
+
+def _extract_text_tool_calls(text):
+    """Some models (the current one, in particular) emit tool calls as text
+    instead of structured tool_calls, e.g.
+    "model_call:edit_history{search_text:'a',replacement_text:'b'}" or
+    "model_call:get_history{limit:5}". Parse them so they can be executed
+    (and the raw text suppressed). Returns [(name, args_dict)] for known
+    tools only."""
+    calls = []
+    if not text:
+        return calls
+    for m in re.finditer(r"(?:model_)?call:([a-zA-Z_]+)\s*\{([^}]*)\}", text):
+        name = m.group(1)
+        if name not in _KNOWN_TOOLS:
+            continue
+        calls.append((name, _parse_arg_block(m.group(2))))
+    return calls
+
+
 async def handle_tool_call(uid, tc):
     """Run one tool the model asked for, once the stream has finished.
 
@@ -1339,10 +1376,24 @@ async def chat(data: dict):
                     raw = rds.get(f"game:{uid}")
                     st = json.loads(raw) if raw else None
                     recovered = False
-                    if st and not st.get("over") and games.actor(st) == "model":
-                        # the model's turn: recover the move from its text,
-                        # or auto-pick one - so the game never stalls, even
-                        # if the model emits no text at all.
+                    # 1. the model may emit tool calls as text (model_call:...)
+                    #    instead of structured tool_calls - execute them and
+                    #    suppress the raw text.
+                    text_calls = _extract_text_tool_calls(ttlResponse) if ttlResponse else []
+                    if text_calls:
+                        for name, args in text_calls:
+                            tc = {
+                                "id": "textcall-" + str(int(time.time() * 1000)),
+                                "type": "function",
+                                "function": {"name": name, "arguments": json.dumps(args)},
+                            }
+                            await handle_tool_call(uid, tc)
+                        yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
+                        recovered = True
+                    # 2. game: the model's turn - recover the move from its text
+                    #    (or auto-pick one) so the game never stalls, even if
+                    #    the model emits no text at all.
+                    if not recovered and st and not st.get("over") and games.actor(st) == "model":
                         move = (games.parse_model_move(st, ttlResponse) if ttlResponse else None) or games.auto_move(st)
                         if move:
                             note, _invalid = games.apply_move(st, move, "model")
@@ -1364,6 +1415,7 @@ async def chat(data: dict):
                                 },
                             })
                             recovered = True
+                    # 3. save the text (if nothing was recovered).
                     if not recovered and ttlResponse:
                         add_to_session(uid, {"role": "assistant", "content": ttlResponse})
                     break
