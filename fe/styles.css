@@ -460,11 +460,8 @@ table {
 .rating-numrow {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.35rem;
-}
-.rating-btns {
-  display: flex;
-  gap: 0.25rem;
 }
 .rating-btn {
   font-size: 0.58rem;
