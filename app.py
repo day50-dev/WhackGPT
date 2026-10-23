@@ -1282,15 +1282,19 @@ def _solicit_reference_choice(text):
     links' | 'no links'. 'no links' is a valid answer (skip)."""
     prompt = (
         "For the following response, decide whether to provide scholarly "
-        "references (real web links) for the topic. Choose exactly one of: "
-        '"web search", "use links", or "no links". '
-        '"web search" = the topic warrants a web search for references. '
-        '"use links" = use links (treat like web search). '
-        '"no links" = no references needed. '
-        "If you choose \"web search\" or \"use links\", also provide a search "
-        "query for the topic.\n\n"
-        'Respond with ONLY JSON: {"choice": "...", "query": "..."}\n\n'
-        f"Response:\n\"\"\"\n{text[:2000]}\n\"\"\""
+        "references (real web links) for the topic. This is a fun feature: "
+        "the advice is absurd, but the references are deadpan scholarly "
+        "(real websites) - a contrast. DEFAULT TO web search for most "
+        "topics (it is fun to find real links for absurd advice). Only pick "
+        "no links if the topic is truly generic or trivial (RARE). Choose "
+        "exactly one of: web search (the topic warrants a web search for "
+        "references; DEFAULT, pick this for most topics), use links (treat "
+        "like web search), or no links (the topic is too generic or "
+        "trivial; RARE). If you choose web search or use links, also "
+        "provide a search query for the topic.\n\n"
+        "Respond with ONLY JSON: {" + '"choice": "...", "query": "..."' + "}\n\n"
+        "Response:\n"
+        + text[:2000]
     )
     try:
         response = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
