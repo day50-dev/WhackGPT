@@ -317,7 +317,10 @@ def generate_summary(text, max_length=30):
         result = response.json()
         subject = result["choices"][0]["message"]["content"]
         subject = re.sub(r'\s*\([^)]*\)', '', subject)
-        return subject.strip(' "\'')
+        subject = subject.strip(' "\'')
+        # Treat an empty title as a failure (so summarize() keeps the
+        # provisional title instead of clobbering it with "").
+        return subject if subject else None
 
     except Exception as e:
         print(f"Error generating summary: {e}")
@@ -471,6 +474,20 @@ def summarize(uid, summary=None):
         return
     rds.hset(_topicList, uid, summary)
     rds.publish(_topicList, json.dumps({uid: summary}))
+
+def ensure_title(uid):
+    """After a response, check the conversation title; if it's blank (missing
+    or empty), re-run the summary task so the chat shows in the sidebar. A
+    timestamp guard avoids re-running the slow LLM call on every response."""
+    title = rds.hget(_topicList, uid)
+    if title is not None and title.decode().strip():
+        return  # title is fine
+    last = rds.get(f"title_attempt:{uid}")
+    now = int(time.time())
+    if last is not None and (now - int(last)) < 300:  # attempted within the last 5 min
+        return
+    rds.set(f"title_attempt:{uid}", now, ex=3600)  # track the attempt (1h TTL)
+    run_in_background(summarize, uid)
 
 def _image_ext(blob):
     """The extension matching the bytes we were actually handed."""
@@ -1665,6 +1682,7 @@ async def chat(data: dict):
                         # metrics) - the bars appear under the message when
                         # done. Off the loop: it's a blocking model call.
                         run_in_background(rate_and_attach, uid, ttlResponse)
+                        run_in_background(ensure_title, uid)
                     break
 
                 # Completed with tool calls - run them, then let the model
@@ -1715,6 +1733,7 @@ async def chat(data: dict):
                     if final_text:
                         add_to_session(uid, {"role": "assistant", "content": final_text})
                         run_in_background(rate_and_attach, uid, final_text)
+                        run_in_background(ensure_title, uid)
                     break
 
                 yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
