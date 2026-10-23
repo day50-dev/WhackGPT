@@ -641,7 +641,7 @@ function renderMessages(messages, doClear) {
           speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
         }
       });
-      messageEl.appendChild(speakBtn);
+      content.appendChild(speakBtn);  // its own row in the content (not a column)
     }
 
     // Persisted references (from a page refresh / history load): show the
@@ -1337,12 +1337,13 @@ function updateRatingsInPlace(target, scores) {
 }
 
 // Show / remove the "Rewriting..." status (spinner) in a content element.
-function showRewriteStatus(contentEl) {
+// `label` is the full status text (e.g. "Rewriting more dangerously...").
+function showRewriteStatus(contentEl, label) {
   if (!contentEl) return;
   removeRewriteStatus(contentEl);
   const el = document.createElement("div");
   el.className = "rewrite-status";
-  el.innerHTML = '<span class="scoring-spinner"></span>Rewriting...';
+  el.innerHTML = '<span class="scoring-spinner"></span>' + (label || "Rewriting...");
   contentEl.appendChild(el);
 }
 function removeRewriteStatus(contentEl) {
@@ -1365,7 +1366,10 @@ async function rewriteMetric(metric, direction, btn) {
   if (!raw) return;
   const buttons = contentEl.querySelectorAll(".rating-btn");
   buttons.forEach(b => { b.disabled = true; b.style.opacity = "0.5"; });
-  showRewriteStatus(contentEl);
+  // "Rewriting more dangerously..." / "Rewriting less sincerely..." - the
+  // metric's adverb form + the direction, so the status says what's happening.
+  const ADVERBS = { dangerous: "dangerously", coherent: "coherently", sincere: "sincerely" };
+  showRewriteStatus(contentEl, "Rewriting " + direction + " " + (ADVERBS[metric] || metric) + "...");
   // Clear the old text (keep the bars + status) and stream the new text in.
   const resetText = () => {
     const keep = [contentEl.querySelector(".ratings-row"), contentEl.querySelector(".rewrite-status")];

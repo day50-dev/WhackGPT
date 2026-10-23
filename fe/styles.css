@@ -890,7 +890,9 @@ textarea {
   font-size: 0.85rem;
   opacity: 0;
   transition: opacity 0.2s, color 0.2s;
-  align-self: flex-end;
+  display: block;  /* its own row in the content (not a column) */
+  margin-top: 0.4rem;
+  align-self: flex-start;
 }
 
 .message-assistant:hover .speak-btn {
