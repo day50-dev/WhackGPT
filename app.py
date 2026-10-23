@@ -403,11 +403,29 @@ _REWRITE_INSTRUCTIONS = {
     ("sincere", "less"): "Rewrite this response to be much more jokey, playful and full of puns and silliness. Keep the same topic and roughly the same length.",
 }
 
+def _save_rewrite(uid, original, newtext, ratings):
+    """Replace the original assistant message (matching `original`) with the
+    rewritten text + new rating, so the rewrite persists across refresh."""
+    key = f"sess:{uid}"
+    raw = rds.lrange(key, 0, -1)
+    for i, item in enumerate(raw):
+        try:
+            msg = json.loads(item.decode())
+        except Exception:
+            continue
+        if msg.get("role") == "assistant" and msg.get("content") == original:
+            msg["content"] = newtext
+            if ratings:
+                msg["ratings"] = ratings
+            rds.lset(key, i, json.dumps(msg))
+            break
+
 @app.post("/rewrite")
 async def rewrite(data: dict):
     text = (data.get("text") or "").strip()
     metric = data.get("metric")
     direction = data.get("direction")
+    uid = data.get("uid")
     if not text or metric not in ("dangerous", "coherent", "sincere") or direction not in ("more", "less"):
         return JSONResponse({"error": "bad request"}, status_code=400)
     instruction = _REWRITE_INSTRUCTIONS[(metric, direction)]
@@ -428,6 +446,11 @@ async def rewrite(data: dict):
                     yield f"data: {json.dumps({'t': content})}\n\n"
             # After the text is complete, re-score it so the bars can update.
             ratings = await asyncio.to_thread(rate_response, full)
+            # Persist the rewrite: replace the original assistant message
+            # (matching the original text) with the rewritten text + new
+            # rating, so it survives a refresh.
+            if uid:
+                await asyncio.to_thread(_save_rewrite, uid, text, full, ratings)
             yield f"data: {json.dumps({'done': True, 'ratings': ratings})}\n\n"
         except Exception as e:
             print(f"Error in rewrite stream: {e}")
