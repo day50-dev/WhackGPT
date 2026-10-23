@@ -75,7 +75,7 @@ async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=
     headers = { "Content-Type": "application/json", }
 
     payload = {
-        "think": False,
+        #"think": False,
         "model": model,
         "messages": messages,
         "stream": True
@@ -205,6 +205,22 @@ _tools =  [{
             "required": ["url"],
         },
     },
+}, {
+    "type": "function",
+    "function": {
+        "name": "draw_svg",
+        "description": "Draw a picture, diagram, chart, logo, or illustration by writing an SVG document. Use it whenever the user asks you to draw, sketch, or illustrate something (a diagram of a plan, a chart, a logo, a caricature). Write the COMPLETE svg markup - a single <svg> element with a viewBox, e.g. '<svg viewBox=\"0 0 400 300\">...</svg>'. It is shown to the user automatically, so call it exactly ONCE per request and do not call it again for the same request.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "svg": {
+                    "type": "string",
+                    "description": "the complete SVG document",
+                },
+            },
+            "required": ["svg"],
+        },
+    },
 }] 
 
 # User-side /commands that run one of the model's tools directly. The
@@ -290,7 +306,10 @@ def generate_summary(text, max_length=30):
             "X-Title": "WhackGPT"
         }
         payload = {"model": _model, "messages": messages}
-        response = httpx.post(f"{DYVA_API_BASE}/chat/completions", json=payload, headers=headers, timeout=30.0)
+        # This is a big local model - a non-streaming title call can take
+        # well over a minute, so the old 30s timeout always failed. Give it
+        # room to finish; it runs in the background, so a long wait is fine.
+        response = httpx.post(f"{DYVA_API_BASE}/chat/completions", json=payload, headers=headers, timeout=180.0)
         result = response.json()
         subject = result["choices"][0]["message"]["content"]
         subject = re.sub(r'\s*\([^)]*\)', '', subject)
@@ -298,7 +317,9 @@ def generate_summary(text, max_length=30):
 
     except Exception as e:
         print(f"Error generating summary: {e}")
-        return "Summary unavailable"
+        # Return None (not a placeholder) so summarize() keeps the provisional
+        # title instead of clobbering it with "Summary unavailable".
+        return None
 
 
 # we don't need to maintain separate keys or do any extra
@@ -316,16 +337,28 @@ def touch(uid):
 
 def summarize(uid, summary=None):
     if summary is None:
-        history = "\n".join([
-            x.get("content")
-            for x in filter(
-                lambda x: x.get("role") == "user",
-                [json.loads(x) for x in rds.lrange(f"sess:{uid}", 0, -3)],
-            )
-        ])
-
-        summary = generate_summary(history)
-
+        # The title is generated from the conversation. The slow model can
+        # time out, so on a failure wait a bit and try ONE more time - by
+        # then the conversation has more messages, so there is more to
+        # summarize and the attempt is more likely to succeed. Each try
+        # re-reads the current (growing) conversation.
+        for _attempt in range(2):
+            history = "\n".join([
+                x.get("content")
+                for x in filter(
+                    lambda x: x.get("role") == "user",
+                    [json.loads(x) for x in rds.lrange(f"sess:{uid}", 0, -3)],
+                )
+            ])
+            summary = generate_summary(history)
+            if summary is not None:
+                break
+            if _attempt == 0:
+                time.sleep(45)  # let the conversation grow before the extra try
+    if summary is None:
+        # Both tries failed - keep whatever provisional title is already
+        # there so the chat still shows in the sidebar.
+        return
     rds.hset(_topicList, uid, summary)
     rds.publish(_topicList, json.dumps({uid: summary}))
 
@@ -374,6 +407,15 @@ def generate_image(prompt):
     with open(f"fe/images/{image_name}", "wb") as f:
         f.write(blob)
     return image_name
+
+def draw_svg(svg):
+    """Save a model-drawn SVG document to fe/svg and return its filename.
+    The frontend renders it inline (like a generated image)."""
+    os.makedirs("fe/svg", exist_ok=True)
+    name = uuid.uuid4().hex + ".svg"
+    with open(f"fe/svg/{name}", "w") as f:
+        f.write(svg)
+    return name
 
 async def receive_messages(websocket: websockets.ClientConnection, output_queue):
     with tqdm.tqdm(desc="Receiving audio", unit=" seconds generated") as pbar:
@@ -540,6 +582,12 @@ def filter_tools(ll):
                         'tool_call_id': row['content'].get('tool_call_id', ''),
                         'content': "Image generated and shown to the user. Do not call generate_image again for this request.",
                     }
+                elif tname == 'draw_svg':
+                    row = {
+                        'role': 'tool',
+                        'tool_call_id': row['content'].get('tool_call_id', ''),
+                        'content': "Drawing shown to the user. Do not call draw_svg again for this request.",
+                    }
                 else:
                     row = {
                         'role': 'tool',
@@ -556,7 +604,7 @@ def filter_tools(ll):
 
 # Tools the model is allowed to invoke. Used to guard the text-tool-call
 # parser so a made-up tool name in the model's text is never executed.
-_KNOWN_TOOLS = {"generate_image", "edit_history", "get_history", "play_game", "web_search", "web_fetch"}
+_KNOWN_TOOLS = {"generate_image", "draw_svg", "edit_history", "get_history", "play_game", "web_search", "web_fetch"}
 
 
 def _parse_arg_block(argstr):
@@ -671,6 +719,44 @@ async def handle_tool_call(uid, tc):
                 "role": "tool",
                 "name": "generate_image",
                 "content": image_name,
+            },
+        })
+
+    elif name == "draw_svg":
+        svg = (args.get("svg") or "").strip()
+        if not svg:
+            return
+        # guard: if the most recent message is a draw_svg result, the model is
+        # re-calling the tool in the current turn - skip the duplicate.
+        try:
+            recent = rds.lrange(f"sess:{uid}", 0, 0)
+            if recent:
+                m = json.loads(html.unescape(recent[0].decode()))
+                if isinstance(m.get("content"), dict) and m["content"].get("name") == "draw_svg":
+                    add_to_session(uid, {
+                        "role": "assistant",
+                        "content": {
+                            "tool_call_id": tc["id"],
+                            "role": "tool",
+                            "name": "draw_svg",
+                            "content": "drawing already shown for this request - do not call draw_svg again",
+                        },
+                    })
+                    return
+        except Exception:
+            pass
+        try:
+            svg_name = await asyncio.to_thread(draw_svg, svg)
+        except Exception as e:
+            print(f"Error processing draw_svg tool: {e}")
+            return
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "draw_svg",
+                "content": svg_name,
             },
         })
 
@@ -1225,12 +1311,17 @@ async def chat(data: dict):
             history = add_to_session(uid)
             fetched_pages = ""
         if isFirst:
-            # Titling costs a whole LLM round trip. It fires at the end of
-            # generate() - after the main inference is done - so it doesn't
-            # compete with the answer for the model (which made it time out
-            # and return "Summary unavailable"). The finished title is pushed
-            # out over the topics websocket by summarize().
-            title_text = text or "(an image was shared)"
+            # The chat must appear in the sidebar immediately, not after a
+            # whole LLM round trip. Set a provisional title (a short version
+            # of the first message) right now, then refine it with a deadpan
+            # LLM title in the background. Firing here (not at the end of
+            # generate()) means it doesn't depend on the stream being fully
+            # consumed, and summarize() keeps the provisional title if the
+            # slow LLM call fails.
+            prov = re.sub(r"\s+", " ", text or "(an image was shared)").strip()[:40]
+            rds.hset(_topicList, uid, prov)
+            rds.publish(_topicList, json.dumps({uid: prov}))
+            run_in_background(summarize, uid)
 
         openrouter_model = _model
 
@@ -1521,11 +1612,6 @@ async def chat(data: dict):
                         _a = {}
                     ran_tools.add((tc["function"]["name"], json.dumps(_a, sort_keys=True)))
                 history = filter_tools(add_to_session(uid))
-
-            # Fire the title now - the main inference is done, so this LLM
-            # call doesn't race the answer for the model.
-            if isFirst:
-                run_in_background(lambda t: summarize(uid, generate_summary(t)), title_text)
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 

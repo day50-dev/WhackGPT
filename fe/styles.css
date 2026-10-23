@@ -41,6 +41,15 @@ a:hover {
   box-shadow: 0 0 24px 4px rgba(0, 0, 0, 0.45);
 }
 
+/* model-drawn SVGs: scale to fill the column, keep aspect ratio */
+.svg-drawing {
+  width: 100%;
+}
+.svg-img {
+  width: 100%;
+  height: auto;
+}
+
 .message-assistant {
   max-width: 80vw;
   word-break: break-word;

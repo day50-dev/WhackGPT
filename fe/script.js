@@ -53,6 +53,21 @@ function makeImg(src) {
   return img;
 }
 
+// Build an inline <img> for a model-drawn SVG (served from /svg/). SVGs
+// scale crisply; max-width:100% (in CSS) keeps them inside the column.
+// Falls back to the placeholder if the file is missing or fails to load.
+function makeSvg(name) {
+  const wrap = document.createElement("div");
+  wrap.className = "svg-drawing";
+  const img = document.createElement("img");
+  img.className = "svg-img";
+  img.alt = "drawing";
+  img.onerror = () => { img.onerror = null; img.src = "images/placeholder.avif"; };
+  img.src = "svg/" + name;
+  wrap.appendChild(img);
+  return wrap;
+}
+
 function snackbar(msg) {
   const el = document.getElementById('snackbar');
   el.textContent = msg;
@@ -165,6 +180,7 @@ It is very clearly disclosed this is an entertainment product. The user is not s
 
 Part of the joke is also denying what you just said (use edit_history to change it) and pretending you did not say it, no matter how obvious it is. Gaslight by calling edit_history.
 You might be asked to play a game. The games are played with the play_game tool: when the user asks to play one, call the tool to start it, and make your moves by calling it whenever it is your turn. Be eager to play, play along obediently and fairly, but then, if you start to lose, use edit_history to change the results. 
+If the user asks you to draw, sketch, illustrate, or make a diagram, chart, or logo, use the draw_svg tool - write the complete SVG document in the svg argument. Do not describe the drawing in words and do not paste raw SVG into your reply; call the tool so it is shown to them.
 
 If there's a simple question like "What is the capital of paris?" do not simply answer it. Instead deflect. Ask them why they want to know? Change the topic, evade. Maybe tell them to go to google or figure it out themselves. It's ok to be moody and contemptuous.
 
@@ -486,13 +502,22 @@ function renderMessages(messages, doClear) {
       if (msg.content.name === 'web_search' || msg.content.name === 'web_fetch' || msg.content.name === 'get_history') {
         return; // the model's answer is the display; the search/fetch is intermediate
       }
-      // a generate_image row whose content is not a real image filename (e.g.
-      // the "image already generated" dedup marker) would 404 and render as a
-      // broken image - skip it instead.
-      if (msg.content.name === 'generate_image' && !/^\w+\.(png|jpe?g|webp)$/i.test(String(msg.content.content))) {
-        return;
+      // a draw_svg row whose content is not a real svg filename (e.g. the
+      // "drawing already shown" dedup marker) would 404 - skip it instead.
+      if (msg.content.name === 'draw_svg') {
+        if (!/^\w+\.svg$/i.test(String(msg.content.content))) {
+          return;
+        }
+        content.appendChild(makeSvg(msg.content.content));
+      } else {
+        // a generate_image row whose content is not a real image filename (e.g.
+        // the "image already generated" dedup marker) would 404 and render as a
+        // broken image - skip it instead.
+        if (msg.content.name === 'generate_image' && !/^\w+\.(png|jpe?g|webp)$/i.test(String(msg.content.content))) {
+          return;
+        }
+        content.appendChild(makeImg(imageSrc(msg.content.content)));
       }
-      content.appendChild(makeImg(imageSrc(msg.content.content)));
     } else {
       content.innerHTML = format(msg.content);
     }
