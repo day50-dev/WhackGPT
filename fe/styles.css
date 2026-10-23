@@ -292,6 +292,7 @@ table {
   padding: 1rem;
   display: flex;
   flex-direction: column;
+  align-items: center; /* center the message column to match the input field */
   gap: 1.5rem;
 }
 
@@ -303,6 +304,8 @@ table {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  width: 100%;
+  max-width: 800px;
   height: 100%;
   text-align: center;
   padding: 2rem;
@@ -352,6 +355,7 @@ table {
   display: flex;
   gap: 1rem;
   padding: 0.5rem 1rem;
+  width: 100%;
   max-width: 800px;
 }
 
@@ -361,7 +365,6 @@ table {
 
 .message-user {
   background-color: var(--message-user-bg);
-  margin-left: auto;
 }
 
 .avatar {
@@ -774,6 +777,7 @@ textarea {
 }
 
 .thinking-block {
+  width: 100%;
   max-width: 800px;
   padding: 0.5rem 1rem;
 }
@@ -1000,6 +1004,7 @@ textarea {
 
 /* ---- games (JS game master renders the board into the chat) ---- */
 .game-inline {
+  width: 100%;
   padding: 0.25rem 1rem;
   max-width: 800px;
 }
