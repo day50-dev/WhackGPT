@@ -1225,11 +1225,12 @@ async def chat(data: dict):
             history = add_to_session(uid)
             fetched_pages = ""
         if isFirst:
-            # Titling costs a whole LLM round trip. Do it off the request path
-            # so the first token reaches the browser immediately; the finished
-            # title is pushed out over the topics websocket by summarize().
+            # Titling costs a whole LLM round trip. It fires at the end of
+            # generate() - after the main inference is done - so it doesn't
+            # compete with the answer for the model (which made it time out
+            # and return "Summary unavailable"). The finished title is pushed
+            # out over the topics websocket by summarize().
             title_text = text or "(an image was shared)"
-            run_in_background(lambda t: summarize(uid, generate_summary(t)), title_text)
 
         openrouter_model = _model
 
@@ -1520,6 +1521,11 @@ async def chat(data: dict):
                         _a = {}
                     ran_tools.add((tc["function"]["name"], json.dumps(_a, sort_keys=True)))
                 history = filter_tools(add_to_session(uid))
+
+            # Fire the title now - the main inference is done, so this LLM
+            # call doesn't race the answer for the model.
+            if isFirst:
+                run_in_background(lambda t: summarize(uid, generate_summary(t)), title_text)
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
