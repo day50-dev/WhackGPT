@@ -1324,10 +1324,15 @@ def solicit_references(uid, text):
     publishes a live event so the open chat can attach without a refresh."""
     choice, query = _solicit_reference_choice(text)
     if choice == "no links" or not query:
+        # Tell the open chat to drop the "Finding references..." spinner
+        # (a valid 'no links' answer, not a failure).
+        rds.publish(f"sess:{uid}", json.dumps({"type": "references_skipped", "text": text}))
         return
     results = keenable_search_raw(query, 3)
     if not isinstance(results, list) or not results:
-        return  # no results (or an error) - no references
+        # No results (or an error) - no references; drop the spinner.
+        rds.publish(f"sess:{uid}", json.dumps({"type": "references_skipped", "text": text}))
+        return
     from urllib.parse import urlparse
     year = time.strftime("%Y")
     citations = []

@@ -527,7 +527,8 @@ table {
 /* Spinner + status text shown while the rating model scores ("Scoring...")
    or the more/less buttons rewrite the reply ("Rewriting..."). */
 .scoring-indicator,
-.rewrite-status {
+.rewrite-status,
+.references-indicator {
   display: flex;
   align-items: center;
   gap: 0.4rem;
