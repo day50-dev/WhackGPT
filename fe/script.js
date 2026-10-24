@@ -1291,8 +1291,8 @@ function ratingsBar(scores) {
     numRow.appendChild(num);
     numRow.appendChild(moreBtn);
     cell.appendChild(label);
-    cell.appendChild(track);
-    cell.appendChild(numRow);
+    cell.appendChild(numRow);  // the less/more (regenerate) buttons + % - above the bar
+    cell.appendChild(track);   // the bar - below now
     row.appendChild(cell);
   }
   return row;
