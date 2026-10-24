@@ -1936,6 +1936,47 @@ async def speak(data: dict):
         print(f"Error in speak: {e}")
         return Response(content=b"", media_type="audio/mpeg")
 
+def _extract_video_id(url):
+    """Extract the YouTube video ID from a URL (watch?v=, youtu.be/, embed/,
+    shorts/, live/)."""
+    m = re.search(r"(?:v=|youtu\.be/|embed/|shorts/|live/)([A-Za-z0-9_-]{11})", url)
+    return m.group(1) if m else None
+
+@app.post("/explore")
+async def explore(data: dict):
+    """'Explore more': search YouTube (embeddable) or Reddit for more info on
+    the reply's topic. Returns a list of results (title + url, + video_id for
+    YouTube)."""
+    text = (data.get("text") or "").strip()
+    source = data.get("source")
+    if source not in ("youtube", "reddit"):
+        return JSONResponse({"error": "source must be 'youtube' or 'reddit'"}, status_code=400)
+    if not text:
+        return JSONResponse({"error": "no text"}, status_code=400)
+    # Derive a focused query from the reply (first sentence, capped at 90 chars).
+    first = re.split(r"[.!?]\s+|\n", text, maxsplit=1)[0].strip()
+    query = (first if len(first) >= 8 else text)[:90]
+    results = await asyncio.to_thread(keenable_search_raw, f"{query} {source}", 10)
+    out = []
+    if isinstance(results, list):
+        for r in results:
+            url = r.get("url", "")
+            title = (r.get("title") or "").strip()
+            if source == "youtube":
+                if "youtube.com" not in url and "youtu.be" not in url:
+                    continue
+                vid = _extract_video_id(url)
+                if not vid:
+                    continue
+                out.append({"title": title, "url": url, "video_id": vid})
+            else:  # reddit
+                if "reddit.com" not in url:
+                    continue
+                out.append({"title": title, "url": url})
+            if len(out) >= 5:
+                break
+    return JSONResponse({"source": source, "results": out})
+
 @app.get("/history/{id}")
 async def get_history(id: str):
     """Returns the chat history for a given session ID."""

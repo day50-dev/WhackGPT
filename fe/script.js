@@ -657,6 +657,10 @@ function renderMessages(messages, doClear) {
     if (msg.role === 'assistant' && msg.ratings) {
       content.appendChild(ratingsBar(msg.ratings));
     }
+    // "Explore more" (search YouTube/Reddit for more info) - at the bottom.
+    if (msg.role === 'assistant' && (typeof msg.content === 'string') && msg.content.trim()) {
+      content.appendChild(exploreBlock(msg.content));
+    }
 
     // Persisted thinking tokens (from a page refresh / history load): show
     // the thinking block above the text (matching the live behavior).
@@ -1143,8 +1147,13 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     if (!partialContent) {
       assistantMsgEl.remove();
     } else {
-      showScoring(assistantMsgEl.querySelector(".message-content"));
-      showReferences(assistantMsgEl.querySelector(".message-content"));
+      const contentEl = assistantMsgEl.querySelector(".message-content");
+      // "Explore more" (search YouTube/Reddit) at the bottom. The scoring/
+      // references indicators and the bars/references (which arrive async)
+      // all insert before it, so it stays last.
+      contentEl.appendChild(exploreBlock(partialContent));
+      showScoring(contentEl);
+      showReferences(contentEl);
     }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     maybeShowSurvey();
@@ -1332,6 +1341,96 @@ function referencesBlock(refs) {
   return block;
 }
 
+// Build the "Explore more" block: buttons to search YouTube (embeddable
+// video) or Reddit for more info on the reply's topic. The results appear
+// inline when a button is clicked (YouTube embeds a video player).
+function exploreBlock(text) {
+  const block = document.createElement("div");
+  block.className = "explore-block";
+  const header = document.createElement("div");
+  header.className = "explore-header";
+  header.textContent = "Explore more";
+  block.appendChild(header);
+  const results = document.createElement("div");
+  results.className = "explore-results";
+  block.appendChild(results);
+  const btns = document.createElement("div");
+  btns.className = "explore-btns";
+  for (const src of ["youtube", "reddit"]) {
+    const b = document.createElement("button");
+    b.className = "explore-btn";
+    b.dataset.src = src;
+    b.textContent = src === "youtube" ? "🎬 Search YouTube" : "👽 Search Reddit";
+    b.addEventListener("click", () => exploreSource(src, text, results, btns));
+    btns.appendChild(b);
+  }
+  block.appendChild(btns);
+  return block;
+}
+
+// Search YouTube / Reddit for more info and show the results inline (YouTube
+// embeds a video player, Reddit shows links). Idempotent per source: a
+// re-click re-runs the search, not stacks another result set.
+async function exploreSource(source, text, resultsEl, btnsEl) {
+  const btn = btnsEl.querySelector(`[data-src="${source}"]`);
+  if (btn) { btn.disabled = true; btn.classList.add("loading"); }
+  // Replace any previous result set for this source (keep the other's).
+  const existing = resultsEl.querySelector(`.explore-result[data-source="${source}"]`);
+  if (existing) existing.remove();
+  const box = document.createElement("div");
+  box.className = "explore-result";
+  box.dataset.source = source;
+  box.innerHTML = '<span class="scoring-spinner"></span> Searching...';
+  resultsEl.appendChild(box);
+  try {
+    const res = await fetch("/explore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, source }),
+    });
+    const data = await res.json();
+    const items = data.results || [];
+    box.innerHTML = "";
+    if (!items.length) {
+      box.textContent = "No results. The internet has nothing on this (surprising).";
+    } else {
+      const list = document.createElement("div");
+      list.className = "explore-list";
+      items.forEach((r) => {
+        if (source === "youtube" && r.video_id) {
+          // Embed a YouTube player (the first one is the star).
+          const vid = document.createElement("div");
+          vid.className = "explore-video";
+          const iframe = document.createElement("iframe");
+          iframe.src = `https://www.youtube.com/embed/${r.video_id}`;
+          iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+          iframe.allowFullscreen = true;
+          iframe.title = r.title || "YouTube video";
+          vid.appendChild(iframe);
+          const cap = document.createElement("div");
+          cap.className = "explore-cap";
+          cap.textContent = r.title || "";
+          vid.appendChild(cap);
+          list.appendChild(vid);
+        } else {
+          const a = document.createElement("a");
+          a.className = "explore-link";
+          a.href = r.url;
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.textContent = r.title || r.url;
+          list.appendChild(a);
+        }
+      });
+      box.appendChild(list);
+    }
+  } catch {
+    box.textContent = "Couldn't search. Try again.";
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove("loading"); }
+  }
+}
+
 // Get just the reply text from a message content element (excluding the
 // rating bar, the "Scoring..." indicator, and the "Finding references..."
 // indicator, which are separate children).
@@ -1465,7 +1564,7 @@ function showScoring(contentEl) {
   const el = document.createElement("div");
   el.className = "scoring-indicator";
   el.innerHTML = '<span class="scoring-spinner"></span>Scoring...';
-  contentEl.appendChild(el);
+  insertBeforeExplore(contentEl, el);
   setTimeout(() => removeScoring(contentEl), 15000);
 }
 function removeScoring(contentEl) {
@@ -1485,13 +1584,21 @@ function showReferences(contentEl) {
   const el = document.createElement("div");
   el.className = "references-indicator";
   el.innerHTML = '<span class="scoring-spinner"></span>Finding references...';
-  contentEl.appendChild(el);
+  insertBeforeExplore(contentEl, el);
   setTimeout(() => removeReferences(contentEl), 90000);
 }
 function removeReferences(contentEl) {
   if (!contentEl) return;
   const el = contentEl.querySelector(".references-indicator");
   if (el) el.remove();
+}
+
+// Insert `el` into `contentEl` before the "Explore more" block (so explore
+// stays at the bottom), or append if there's no explore block.
+function insertBeforeExplore(contentEl, el) {
+  const explore = contentEl.querySelector(".explore-block");
+  if (explore) contentEl.insertBefore(el, explore);
+  else contentEl.appendChild(el);
 }
 
 // Find the assistant bubble whose text matches (newest first, markdown
@@ -1532,7 +1639,7 @@ function attachRatings(text, scores) {
   removeScoring(target); // swap the "Scoring..." indicator for the real bars
   const existing = target.querySelector(".ratings-row");
   if (existing) existing.remove();
-  target.appendChild(ratingsBar(scores));
+  insertBeforeExplore(target, ratingsBar(scores));
 }
 
 // Attach the scholarly references to the matching bubble (newest first, same
@@ -1568,7 +1675,7 @@ function attachReferences(text, refs) {
   if (ratingRow) {
     target.insertBefore(block, ratingRow);  // before the rating bar
   } else {
-    target.appendChild(block);  // at the end (rating bar not here yet)
+    insertBeforeExplore(target, block);  // before explore (or at the end)
   }
 }
 
