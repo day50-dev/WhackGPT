@@ -1360,8 +1360,9 @@ function exploreBlock(text) {
     youtube: "🎬 Search YouTube",
     reddit: "👽 Search Reddit",
     wikihow: "📖 Search WikiHow",
+    "4chan": "🏴 Search 4chan",
   };
-  for (const src of ["youtube", "reddit", "wikihow"]) {
+  for (const src of ["youtube", "reddit", "wikihow", "4chan"]) {
     const b = document.createElement("button");
     b.className = "explore-btn";
     b.dataset.src = src;
