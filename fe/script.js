@@ -1386,7 +1386,8 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
   const box = document.createElement("div");
   box.className = "explore-result";
   box.dataset.source = source;
-  box.innerHTML = '<span class="scoring-spinner"></span> Thinking up a search query...';
+  const SERVICE = { youtube: "YouTube", reddit: "Reddit", wikihow: "WikiHow", "4chan": "4chan" };
+  box.innerHTML = `<span class="scoring-spinner"></span> Figuring out how to ${SERVICE[source]} this...`;
   resultsEl.appendChild(box);
   try {
     const res = await fetch("/explore", {
