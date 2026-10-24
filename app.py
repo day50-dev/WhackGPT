@@ -1879,20 +1879,41 @@ async def chat(data: dict):
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
+def _tts_subsection(text, max_words=80):
+    """Truncate a reply to a subsection for TTS. The TTS host caps at ~30s,
+    so text longer than ~87 words gets rushed (284 wpm vs ~175 normal).
+    Cut at the last sentence boundary within max_words so the spoken part is
+    a clean, complete thought at a normal pace."""
+    text = (text or "").strip()
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    cut = " ".join(words[:max_words])
+    best = -1
+    for sep in (". ", "! ", "? ", " \n"):
+        idx = cut.rfind(sep)
+        if idx > best:
+            best = idx
+    if best > 20:
+        return cut[:best + 1].strip()
+    return cut
+
 @app.post("/speak")
 async def speak(data: dict):
     """Read a reply aloud. Calls the magic server's OpenAI-compatible TTS
     (POST /v1/audio/speech, backed by ComfyUI TTS nodes - QwenTTS, etc.),
     then converts the returned FLAC to MP3 so it plays everywhere (incl.
-    mobile Safari, which doesn't do FLAC). Falls back to the raw FLAC."""
-    text = (data.get("text") or "").strip()
+    mobile Safari, which doesn't do FLAC). Falls back to the raw FLAC.
+    Only speaks a subsection (the host caps at ~30s, so long text would be
+    rushed)."""
+    text = _tts_subsection(data.get("text") or "")
     if not text:
         return Response(content=b"", media_type="audio/mpeg")
     try:
         res = await asyncio.to_thread(
             requests.post,
             f"{DYVA_API_BASE}/audio/speech",
-            json={"input": text[:2000], "voice": "Aiden"},
+            json={"input": text, "voice": "Aiden"},
             timeout=90.0,
         )
         if res.status_code != 200 or not res.content:
