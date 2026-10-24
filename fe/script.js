@@ -1291,8 +1291,8 @@ function ratingsBar(scores) {
     numRow.appendChild(num);
     numRow.appendChild(moreBtn);
     cell.appendChild(label);
-    cell.appendChild(numRow);  // the less/more (regenerate) buttons + % - above the bar
-    cell.appendChild(track);   // the bar - below now
+    cell.appendChild(track);
+    cell.appendChild(numRow);
     row.appendChild(cell);
   }
   return row;
@@ -1375,7 +1375,13 @@ function showRewriteStatus(contentEl, label) {
   const el = document.createElement("div");
   el.className = "rewrite-status";
   el.innerHTML = '<span class="scoring-spinner"></span>' + (label || "Rewriting...");
-  contentEl.appendChild(el);
+  // Insert BEFORE the ratings row (above it), not appended after (below).
+  const ratingRow = contentEl.querySelector(".ratings-row");
+  if (ratingRow) {
+    contentEl.insertBefore(el, ratingRow);
+  } else {
+    contentEl.appendChild(el);
+  }
 }
 function removeRewriteStatus(contentEl) {
   if (!contentEl) return;
