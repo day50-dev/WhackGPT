@@ -1942,20 +1942,59 @@ def _extract_video_id(url):
     m = re.search(r"(?:v=|youtu\.be/|embed/|shorts/|live/)([A-Za-z0-9_-]{11})", url)
     return m.group(1) if m else None
 
+
+def _explore_query(uid, source, text):
+    """Ask the model (with the conversation context) for a good search query
+    for YouTube/Reddit - the core subject, not the absurd framing. Falls
+    back to the first sentence on any failure."""
+    # Recent conversation as context (newest first in Redis - reverse it).
+    try:
+        rows = rds.lrange(f"sess:{uid}", 0, 7)
+        convo = "\n".join(
+            f"{json.loads(x.decode()).get('role', '')}: "
+            f"{str(json.loads(x.decode()).get('content', ''))[:300]}"
+            for x in rows
+        )
+    except Exception:
+        convo = text
+    platform = "YouTube videos" if source == "youtube" else "Reddit posts"
+    prompt = (
+        f"Given this conversation, generate a single web search query (2-6 words) "
+        f"to find relevant {platform} about the main topic. Focus on the core "
+        "subject, not the absurd framing. Respond with ONLY the query - no "
+        f"quotes, no punctuation, no explanation.\n\nConversation:\n{convo}\n\n"
+        f"The reply in question: {text[:500]}"
+    )
+    try:
+        response = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
+            "model": _model,
+            "messages": [{"role": "user", "content": prompt}],
+        }, headers={"Content-Type": "application/json"}, timeout=90.0)
+        result = response.json()
+        q = result["choices"][0]["message"]["content"].strip().strip('"\u201c\u201d').strip()
+        if q and len(q.split()) <= 10:
+            return re.sub(r"\s+", " ", q)
+    except Exception as e:
+        print(f"explore query generation failed: {e}")
+    # Fallback: first sentence, capped.
+    first = re.split(r"[.!?]\s+|\n", text, maxsplit=1)[0].strip()
+    return (first if len(first) >= 8 else text)[:80]
+
+
 @app.post("/explore")
 async def explore(data: dict):
     """'Explore more': search YouTube (embeddable) or Reddit for more info on
-    the reply's topic. Returns a list of results (title + url, + video_id for
-    YouTube)."""
+    the reply's topic. A model call (with the conversation context) infers a
+    good search query first - the core subject, not the absurd framing.
+    Returns a list of results (title + url, + video_id for YouTube)."""
     text = (data.get("text") or "").strip()
     source = data.get("source")
+    uid = data.get("uid") or "anon"
     if source not in ("youtube", "reddit"):
         return JSONResponse({"error": "source must be 'youtube' or 'reddit'"}, status_code=400)
     if not text:
         return JSONResponse({"error": "no text"}, status_code=400)
-    # Derive a focused query from the reply (first sentence, capped at 90 chars).
-    first = re.split(r"[.!?]\s+|\n", text, maxsplit=1)[0].strip()
-    query = (first if len(first) >= 8 else text)[:90]
+    query = await asyncio.to_thread(_explore_query, uid, source, text)
     results = await asyncio.to_thread(keenable_search_raw, f"{query} {source}", 10)
     out = []
     if isinstance(results, list):
@@ -1975,7 +2014,7 @@ async def explore(data: dict):
                 out.append({"title": title, "url": url})
             if len(out) >= 5:
                 break
-    return JSONResponse({"source": source, "results": out})
+    return JSONResponse({"source": source, "query": query, "results": out})
 
 @app.get("/history/{id}")
 async def get_history(id: str):

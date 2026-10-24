@@ -1380,13 +1380,13 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
   const box = document.createElement("div");
   box.className = "explore-result";
   box.dataset.source = source;
-  box.innerHTML = '<span class="scoring-spinner"></span> Searching...';
+  box.innerHTML = '<span class="scoring-spinner"></span> Thinking up a search query...';
   resultsEl.appendChild(box);
   try {
     const res = await fetch("/explore", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, source }),
+      body: JSON.stringify({ text, source, uid: _uid }),
     });
     const data = await res.json();
     const items = data.results || [];
@@ -1394,6 +1394,11 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
     if (!items.length) {
       box.textContent = "No results. The internet has nothing on this (surprising).";
     } else {
+      // What we searched (the model-inferred query) - for transparency.
+      const q = document.createElement("div");
+      q.className = "explore-query";
+      q.textContent = `Searched: \u201c${data.query}\u201d`;
+      box.appendChild(q);
       const list = document.createElement("div");
       list.className = "explore-list";
       items.forEach((r) => {

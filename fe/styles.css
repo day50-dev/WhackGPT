@@ -581,6 +581,12 @@ table {
   align-items: center;
   gap: 0.4rem;
 }
+.explore-query {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin-bottom: 0.3rem;
+}
 .explore-list {
   display: flex;
   flex-direction: column;
