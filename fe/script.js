@@ -1399,25 +1399,55 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
       q.className = "explore-query";
       q.textContent = `Searched: \u201c${data.query}\u201d`;
       box.appendChild(q);
-      const list = document.createElement("div");
-      list.className = "explore-list";
-      items.forEach((r) => {
-        if (source === "youtube" && r.video_id) {
-          // Embed a YouTube player (the first one is the star).
-          const vid = document.createElement("div");
-          vid.className = "explore-video";
-          const iframe = document.createElement("iframe");
-          iframe.src = `https://www.youtube.com/embed/${r.video_id}`;
-          iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
-          iframe.allowFullscreen = true;
-          iframe.title = r.title || "YouTube video";
-          vid.appendChild(iframe);
-          const cap = document.createElement("div");
-          cap.className = "explore-cap";
-          cap.textContent = r.title || "";
-          vid.appendChild(cap);
-          list.appendChild(vid);
-        } else {
+      if (source === "youtube") {
+        const vids = items.filter(r => r.video_id);
+        const links = items.filter(r => !r.video_id);
+        if (vids.length) {
+          // Horizontal carousel of video cards (thumbnail + title). Clicking a
+          // card loads its player (autoplay - allowed by the user gesture).
+          const carousel = document.createElement("div");
+          carousel.className = "explore-carousel";
+          vids.forEach((r) => {
+            const card = document.createElement("div");
+            card.className = "explore-video-card";
+            card.dataset.videoId = r.video_id;
+            const thumb = document.createElement("img");
+            thumb.className = "explore-thumb";
+            thumb.src = `https://img.youtube.com/vi/${r.video_id}/hqdefault.jpg`;
+            thumb.loading = "lazy";
+            thumb.alt = r.title || "YouTube video thumbnail";
+            card.appendChild(thumb);
+            const cap = document.createElement("div");
+            cap.className = "explore-cap";
+            cap.textContent = r.title || "";
+            card.appendChild(cap);
+            card.addEventListener("click", () => {
+              // Stop the currently-playing card, then play this one.
+              carousel.querySelectorAll(".explore-video-card").forEach(c => {
+                c.classList.remove("active");
+                const p = c.querySelector(".explore-player");
+                if (p) p.remove();
+              });
+              card.classList.add("active");
+              loadPlayer(card, r.video_id);
+            });
+            carousel.appendChild(card);
+          });
+          box.appendChild(carousel);
+        }
+        links.forEach(r => {
+          const a = document.createElement("a");
+          a.className = "explore-link";
+          a.href = r.url;
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.textContent = r.title || r.url;
+          box.appendChild(a);
+        });
+      } else {
+        const list = document.createElement("div");
+        list.className = "explore-list";
+        items.forEach((r) => {
           const a = document.createElement("a");
           a.className = "explore-link";
           a.href = r.url;
@@ -1425,15 +1455,31 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
           a.rel = "noopener";
           a.textContent = r.title || r.url;
           list.appendChild(a);
-        }
-      });
-      box.appendChild(list);
+        });
+        box.appendChild(list);
+      }
     }
   } catch {
     box.textContent = "Couldn't search. Try again.";
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove("loading"); }
   }
+}
+
+// Inject a YouTube player (autoplay) into a carousel card, hiding the
+// thumbnail (CSS) while it plays. Only the active card has a player.
+function loadPlayer(card, videoId) {
+  const existing = card.querySelector(".explore-player");
+  if (existing) existing.remove();
+  const wrap = document.createElement("div");
+  wrap.className = "explore-player";
+  const iframe = document.createElement("iframe");
+  iframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`;
+  iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+  iframe.allowFullscreen = true;
+  iframe.title = "YouTube video";
+  wrap.appendChild(iframe);
+  card.insertBefore(wrap, card.firstChild);
 }
 
 // Get just the reply text from a message content element (excluding the
