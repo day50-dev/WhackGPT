@@ -624,6 +624,10 @@ function renderMessages(messages, doClear) {
       speakBtn.addEventListener('click', async () => {
         speakBtn.disabled = true;
         speakBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        const reset = () => {
+          speakBtn.disabled = false;
+          speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+        };
         try {
           const res = await fetch('/speak', {
             method: 'POST',
@@ -631,15 +635,13 @@ function renderMessages(messages, doClear) {
             body: JSON.stringify({ text: msg.content }),
           });
           const blob = await res.blob();
+          if (!blob || blob.size === 0) throw new Error('empty audio');
           const audio = new Audio(URL.createObjectURL(blob));
-          audio.onended = () => {
-            speakBtn.disabled = false;
-            speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
-          };
-          audio.play();
+          audio.onended = reset;
+          audio.onerror = reset;
+          await audio.play();
         } catch {
-          speakBtn.disabled = false;
-          speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+          reset();
         }
       });
       content.appendChild(speakBtn);  // its own row in the content (not a column)

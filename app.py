@@ -1881,11 +1881,39 @@ async def chat(data: dict):
 
 @app.post("/speak")
 async def speak(data: dict):
-    import os
-    path = "fe/voice.mp3"
-    if os.path.exists(path):
-        return Response(content=open(path, "rb").read(), media_type="audio/mpeg")
-    return Response(content=b"", media_type="audio/mpeg")
+    """Read a reply aloud. Calls the magic server's OpenAI-compatible TTS
+    (POST /v1/audio/speech, backed by ComfyUI TTS nodes - QwenTTS, etc.),
+    then converts the returned FLAC to MP3 so it plays everywhere (incl.
+    mobile Safari, which doesn't do FLAC). Falls back to the raw FLAC."""
+    text = (data.get("text") or "").strip()
+    if not text:
+        return Response(content=b"", media_type="audio/mpeg")
+    try:
+        res = await asyncio.to_thread(
+            requests.post,
+            f"{DYVA_API_BASE}/audio/speech",
+            json={"input": text[:2000], "voice": "Aiden"},
+            timeout=90.0,
+        )
+        if res.status_code != 200 or not res.content:
+            return Response(content=b"", media_type="audio/mpeg")
+        flac = res.content
+        # Convert FLAC -> MP3 (universally playable; smaller too).
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                ["ffmpeg", "-y", "-i", "pipe:0", "-codec:a", "libmp3lame", "-qscale:a", "4", "-f", "mp3", "pipe:1"],
+                input=flac, capture_output=True, timeout=60.0,
+            )
+            if proc.returncode == 0 and proc.stdout:
+                return Response(content=proc.stdout, media_type="audio/mpeg")
+        except Exception as e:
+            print(f"ffmpeg convert failed in speak: {e}")
+        # Fallback: the raw FLAC (plays in Chrome/Firefox/Edge).
+        return Response(content=flac, media_type="audio/flac")
+    except Exception as e:
+        print(f"Error in speak: {e}")
+        return Response(content=b"", media_type="audio/mpeg")
 
 @app.get("/history/{id}")
 async def get_history(id: str):
