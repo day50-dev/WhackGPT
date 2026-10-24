@@ -1957,7 +1957,8 @@ def _explore_query(uid, source, text):
         )
     except Exception:
         convo = text
-    platform = "YouTube videos" if source == "youtube" else "Reddit posts"
+    platform = {"youtube": "YouTube videos", "reddit": "Reddit posts",
+               "wikihow": "WikiHow how-to articles"}.get(source, "web pages")
     prompt = (
         f"Given this conversation, generate a single web search query (2-6 words) "
         f"to find relevant {platform} about the main topic. Focus on the core "
@@ -1990,8 +1991,8 @@ async def explore(data: dict):
     text = (data.get("text") or "").strip()
     source = data.get("source")
     uid = data.get("uid") or "anon"
-    if source not in ("youtube", "reddit"):
-        return JSONResponse({"error": "source must be 'youtube' or 'reddit'"}, status_code=400)
+    if source not in ("youtube", "reddit", "wikihow"):
+        return JSONResponse({"error": "source must be 'youtube', 'reddit', or 'wikihow'"}, status_code=400)
     if not text:
         return JSONResponse({"error": "no text"}, status_code=400)
     query = await asyncio.to_thread(_explore_query, uid, source, text)
@@ -2008,8 +2009,9 @@ async def explore(data: dict):
                 if not vid:
                     continue
                 out.append({"title": title, "url": url, "video_id": vid})
-            else:  # reddit
-                if "reddit.com" not in url:
+            else:  # reddit / wikihow
+                domain = "reddit.com" if source == "reddit" else "wikihow.com"
+                if domain not in url:
                     continue
                 out.append({"title": title, "url": url})
             if len(out) >= 5:

@@ -1356,11 +1356,16 @@ function exploreBlock(text) {
   block.appendChild(results);
   const btns = document.createElement("div");
   btns.className = "explore-btns";
-  for (const src of ["youtube", "reddit"]) {
+  const LABELS = {
+    youtube: "🎬 Search YouTube",
+    reddit: "👽 Search Reddit",
+    wikihow: "📖 Search WikiHow",
+  };
+  for (const src of ["youtube", "reddit", "wikihow"]) {
     const b = document.createElement("button");
     b.className = "explore-btn";
     b.dataset.src = src;
-    b.textContent = src === "youtube" ? "🎬 Search YouTube" : "👽 Search Reddit";
+    b.textContent = LABELS[src];
     b.addEventListener("click", () => exploreSource(src, text, results, btns));
     btns.appendChild(b);
   }
