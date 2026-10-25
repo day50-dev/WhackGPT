@@ -577,9 +577,7 @@ table {
 .explore-result {
   font-size: 0.72rem;
   color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
+  display: block;
 }
 .explore-query {
   font-size: 0.68rem;
