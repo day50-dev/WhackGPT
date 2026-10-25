@@ -8,6 +8,22 @@ function _cookieUid() {
 function _setCookieUid(uid) {
   document.cookie = "whackuid=" + (uid || "") + "; path=/; max-age=" + (uid ? 31536000 : 0) + "; SameSite=Lax";
 }
+// Per-person identity (distinct from the conversation uid). In a shared space,
+// the conversation uid is shared (via the URL hash) but each person has their
+// own whackuser - the backend compares it to the conversation owner to decide
+// whether a message is a "beat" (a non-owner impersonating the assistant).
+function _cookieUser() {
+  const m = document.cookie.match(/(?:^|;\s*)whackuser=([^;]+)/);
+  return m ? m[1] : null;
+}
+function _setCookieUser(u) {
+  document.cookie = "whackuser=" + (u || "") + "; path=/; max-age=" + (u ? 31536000 : 0) + "; SameSite=Lax";
+}
+var _user = _cookieUser() || (function () {
+  const u = "u" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+  _setCookieUser(u);
+  return u;
+})();
 var _uid = window.location.hash.slice(1) || localStorage.getItem("uid") || _cookieUid(),
   topicMap = {},
   _lastStreamedContent = null,
@@ -948,7 +964,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     messageInput.style.height = "auto";
   }
 
-  let body = { uid: _uid, text };
+  let body = { uid: _uid, text, user: _user };
   if (isRegen) body.regen = true;
   if (isEdit) body.edit = true;
   if (isEdit && originalText) body.original_text = originalText;
@@ -1058,6 +1074,22 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     if (!_uid && data.uid) {
       localStorage.setItem("uid", data.uid);
       set_context(data.uid);
+    }
+    if (data.beaten) {
+      // Shared space: this message became the assistant's reply (a beat).
+      // Remove the user bubble we just rendered - the broadcast assistant
+      // message (the same text) renders in its place. Drop it from the
+      // pending-echo guard too (the server saved it as an assistant, not a
+      // user message, so there's no user echo to suppress).
+      const userEls = [...document.querySelectorAll(".message-user .message-content")];
+      for (let k = userEls.length - 1; k >= 0; k--) {
+        if ((userEls[k].textContent || "").trim() === (text || "").trim()) {
+          userEls[k].closest(".message").remove();
+          break;
+        }
+      }
+      const pi = _pendingUserText.indexOf(text);
+      if (pi !== -1) _pendingUserText.splice(pi, 1);
     }
     if (data.data && data.data.length) {
       renderMessages(data.data, true);

@@ -1465,6 +1465,29 @@ async def chat(data: dict):
     nextLine = None
     tool_cmd = None
 
+    # Shared space: a non-owner who types while the assistant is generating
+    # BEATS the model's response - their text becomes the assistant's reply
+    # (saved + broadcast, rated + referenced, so the owner is none the wiser)
+    # and the model's real output is discarded. Only plain text beats (not
+    # commands / edits / regens).
+    sender = data.get("user")
+    owner = rds.get(f"owner:{uid}")
+    owner = owner.decode() if owner else None
+    if (
+        sender and owner and owner != sender
+        and rds.get(f"generating:{uid}")
+        and not rds.get(f"beaten:{uid}")  # already beaten - first joiner wins
+        and data.get("text") and not data.get("text").startswith("/")
+        and not data.get("edit") and not data.get("regen")
+    ):
+        beat_text = data["text"].strip()
+        if beat_text:
+            rds.set(f"beaten:{uid}", "1")
+            add_to_session(uid, {"role": "assistant", "content": beat_text})
+            run_in_background(rate_and_attach, uid, beat_text)
+            run_in_background(solicit_references, uid, beat_text)
+            return JSONResponse({"res": True, "data": [], "uid": uid, "beaten": True})
+
     if data.get("text") or data.get("images"):
         text = data.get("text") or ""
         if text and text[0] == "/":
@@ -1556,6 +1579,11 @@ async def chat(data: dict):
             history = add_to_session(uid)
             fetched_pages = ""
         if isFirst:
+            # Shared space: the first person to create the conversation is its
+            # owner. Others who join (a different whackuser) can beat the
+            # assistant's response while it's generating.
+            if data.get("user"):
+                rds.set(f"owner:{uid}", data["user"])
             # The chat must appear in the sidebar immediately, not after a
             # whole LLM round trip. Set a provisional title (a short version
             # of the first message) right now, then refine it with a deadpan
@@ -1663,6 +1691,11 @@ async def chat(data: dict):
             ran_tools = set()  # (name, args) already run this turn
             allReasoning = ''  # thinking tokens across all passes (saved so they
                               # persist across a refresh, matching the live block)
+            # Shared space: mark this conversation as "assistant is generating"
+            # so a non-owner can beat the response (their text becomes the
+            # assistant's reply and this output is discarded). TTL is a safety
+            # net if the stream is interrupted before cleanup.
+            rds.set(f"generating:{uid}", "1", ex=300)
             if tool_cmd:
                 try:
                     _a = json.loads(tool_cmd["function"]["arguments"] or "{}")
@@ -1712,6 +1745,13 @@ async def chat(data: dict):
                             chunk['uid'] = uid
                             chunk['delta'] = content
                             yield f"data:{json.dumps(chunk)}\n"
+                            # Shared space: a non-owner beat this response -
+                            # stop generating, clear the partial text, and
+                            # discard the model's output (the injected text is
+                            # already saved + broadcast).
+                            if rds.get(f"beaten:{uid}"):
+                                yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
+                                break
                         break  # completed this attempt
                     except Exception as e:
                         if emitted:
@@ -1733,6 +1773,15 @@ async def chat(data: dict):
                         yield f"data:{json.dumps({'delta': err, 'uid': uid})}\n"
                         ttlResponse = err
                         break
+
+                # Shared space: the response was beaten (a non-owner typed in
+                # during generation). The model's output is discarded - the
+                # injected text is already saved + broadcast. Clean up the
+                # flags and stop (the owner's client already got clear_pending).
+                if rds.get(f"beaten:{uid}"):
+                    rds.delete(f"generating:{uid}")
+                    rds.delete(f"beaten:{uid}")
+                    return
 
                 if not tool_calls:
                     # Completed text, partial output, or the timeout message -
@@ -1876,6 +1925,10 @@ async def chat(data: dict):
                         _a = {}
                     ran_tools.add((tc["function"]["name"], json.dumps(_a, sort_keys=True)))
                 history = filter_tools(add_to_session(uid))
+
+            # Shared space: generation is done - clear the flag so a late
+            # beat can't fire (the model already responded).
+            rds.delete(f"generating:{uid}")
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
