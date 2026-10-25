@@ -1389,10 +1389,10 @@ function exploreBlock(text) {
   const btns = document.createElement("div");
   btns.className = "explore-btns";
   const LABELS = {
-    youtube: "🎬 Search YouTube",
-    reddit: "👽 Search Reddit",
-    wikihow: "📖 Search WikiHow",
-    "4chan": "🏴 Search 4chan",
+    youtube: "🎬 YouTube",
+    reddit: "👽 Reddit",
+    wikihow: "📖 WikiHow",
+    "4chan": "🏴 4chan",
   };
   for (const src of ["youtube", "reddit", "wikihow", "4chan"]) {
     const b = document.createElement("button");
