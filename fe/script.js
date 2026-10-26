@@ -1431,7 +1431,7 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
     const items = data.results || [];
     box.innerHTML = "";
     if (!items.length) {
-      box.textContent = "No results. The internet has nothing on this (surprising).";
+      box.textContent = `${SERVICE[source]} has nothing on this (surprising).`;
     } else {
       // What we searched (the model-inferred query) - for transparency.
       const q = document.createElement("div");
