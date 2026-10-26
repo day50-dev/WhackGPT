@@ -35,6 +35,7 @@ a:hover {
 
 .message-content img {
   display: block;
+  max-width: 100%; /* fit the message column, not the viewport (mobile-safe) */
   padding: 0.5rem;
   border-radius: 0.75rem;
   background-color: var(--slightly-lighter);
@@ -415,6 +416,7 @@ table {
 
 .message-content {
   flex: 1;
+  min-width: 0; /* allow the flex item to shrink so wide images don't blow out the column */
   line-height: 1.5;
 }
 
