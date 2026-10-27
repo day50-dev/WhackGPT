@@ -1330,12 +1330,12 @@ function ratingsBar(scores) {
     num.textContent = Math.round(pct) + "%";
     const lessBtn = document.createElement("button");
     lessBtn.className = "rating-btn less";
-    lessBtn.textContent = "less";
+    lessBtn.textContent = "\u2212"; // minus sign
     lessBtn.title = "Re-issue, less " + m.label;
     lessBtn.addEventListener("click", () => rewriteMetric(m.key, "less", lessBtn));
     const moreBtn = document.createElement("button");
     moreBtn.className = "rating-btn more";
-    moreBtn.textContent = "more";
+    moreBtn.textContent = "+";
     moreBtn.title = "Re-issue, more " + m.label;
     moreBtn.addEventListener("click", () => rewriteMetric(m.key, "more", moreBtn));
     const numRow = document.createElement("div");

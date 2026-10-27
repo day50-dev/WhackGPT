@@ -466,9 +466,10 @@ table {
   gap: 0.35rem;
 }
 .rating-btn {
-  font-size: 0.58rem;
+  font-size: 0.72rem;
   line-height: 1;
-  padding: 0.2rem 0.4rem;
+  padding: 0.14rem 0.32rem;
+  min-width: 1.35rem;
   border-radius: 0.35rem;
   border: 1px solid var(--border-color);
   background: var(--pill-bg);
