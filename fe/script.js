@@ -1,10 +1,9 @@
-// uid resolution order: URL hash, then localStorage, then a cookie. The cookie
-// is the reliable one behind a proxy - it survives URL rewrites and origin
-// changes that drop the hash or reset localStorage.
-function _cookieUid() {
-  const m = document.cookie.match(/(?:^|;\s*)whackuid=([^;]+)/);
-  return m ? m[1] : null;
-}
+// uid resolution: ONLY the URL hash. Opening whackgpt.com with no hash must
+// land on the welcome screen (a fresh start), not auto-load the last
+// conversation. A conversation is only resumed when its uid is explicitly in
+// the URL (e.g. a shared link, or a refresh where the browser keeps the hash).
+// (The old localStorage/cookie fallback auto-loaded the last conversation on
+// every fresh visit - removed on request.)
 function _setCookieUid(uid) {
   document.cookie = "whackuid=" + (uid || "") + "; path=/; max-age=" + (uid ? 31536000 : 0) + "; SameSite=Lax";
 }
@@ -24,7 +23,7 @@ var _user = _cookieUser() || (function () {
   _setCookieUser(u);
   return u;
 })();
-var _uid = window.location.hash.slice(1) || localStorage.getItem("uid") || _cookieUid(),
+var _uid = window.location.hash.slice(1) || null,
   topicMap = {},
   _lastStreamedContent = null,
   _lastStreamEndTime = 0, // when the last SSE stream finished
