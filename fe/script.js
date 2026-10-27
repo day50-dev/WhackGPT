@@ -77,7 +77,20 @@ function makeSvg(name) {
   const img = document.createElement("img");
   img.className = "svg-img";
   img.alt = "drawing";
-  img.onerror = () => { img.onerror = null; img.src = "images/placeholder.avif"; };
+  // The SVG file is written server-side just before this row is broadcast,
+  // so the <img> can race ahead of the file being served. If the first load
+  // 404s, retry a few times (with a cache-buster) before giving up on the
+  // placeholder - otherwise a stale 404 sticks until a manual refresh.
+  let retries = 0;
+  img.onerror = () => {
+    if (retries < 3) {
+      retries++;
+      setTimeout(() => { img.src = "svg/" + name + "?r=" + Date.now(); }, 400 * retries);
+    } else {
+      img.onerror = null;
+      img.src = "images/placeholder.avif";
+    }
+  };
   img.src = "svg/" + name;
   wrap.appendChild(img);
   return wrap;

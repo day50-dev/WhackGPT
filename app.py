@@ -61,7 +61,7 @@ INFER_TIMEOUT = float(os.environ.get("WHACK_INFER_TIMEOUT", "60"))
 INFER_MAX_ATTEMPTS = int(os.environ.get("WHACK_INFER_ATTEMPTS", "3"))
 INFER_RETRY_DELAY = 2.0
 
-DYVA_API_BASE = "http://127.0.0.1:11434/v1"
+DYVA_API_BASE = "http://127.0.0.1:8080/v1"
 
 # The System One judge model used to rate assistant replies (dangerous /
 # coherent / sincere). A variable so it can be swapped; starts at nimble-v3.
@@ -2226,7 +2226,9 @@ class NoCacheStatic(StaticFiles):
 
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
-        if path in ("", ".") or path.endswith((".html", ".js", ".css")):
+        # .svg is included: a 404 for a just-written SVG must not be negative-
+        # cached, or the drawing sticks as a placeholder until a manual refresh.
+        if path in ("", ".") or path.endswith((".html", ".js", ".css", ".svg")):
             response.headers["Cache-Control"] = "no-cache"
         return response
 

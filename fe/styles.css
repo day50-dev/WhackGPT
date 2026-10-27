@@ -1053,14 +1053,14 @@ textarea {
 .thinking-block {
   width: 100%;
   max-width: 800px;
-  padding: 0.5rem 1rem;
+  padding: 0 1rem;
 }
 
 .thinking-bar {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+  padding: 0.4rem 0.75rem;
   background: var(--pill-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
