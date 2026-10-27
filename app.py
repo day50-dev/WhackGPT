@@ -53,6 +53,11 @@ def _track_ws():
 
 _sd_ip = "127.0.0.1:11434"
 _sd_timeout = 120
+# The magic server's OpenAI-compatible API base. It hosts the System One judge
+# (/v1/systemone) and TTS (/v1/audio/speech) - neither of which the chat proxy
+# (DYVA_API_BASE) serves, so pointing those at DYVA_API_BASE 404s. Chat itself
+# stays on DYVA_API_BASE.
+MAGIC_API_BASE = f"http://{_sd_ip}/v1"
 
 # Inference timeouts: if no chunk arrives within INFER_TIMEOUT seconds (and
 # the connect/write/pool windows), httpx cancels the request so we can retry.
@@ -360,7 +365,7 @@ def rate_response(text):
             "state": text,
             "questions": _RATE_QUESTIONS,
         }
-        response = httpx.post(f"{DYVA_API_BASE}/systemone", json=payload, timeout=120.0)
+        response = httpx.post(f"{MAGIC_API_BASE}/systemone", json=payload, timeout=120.0)
         data = response.json()
         answers = data.get("answers", {})
         out = {}
@@ -2032,7 +2037,7 @@ async def speak(data: dict):
     try:
         res = await asyncio.to_thread(
             requests.post,
-            f"{DYVA_API_BASE}/audio/speech",
+            f"{MAGIC_API_BASE}/audio/speech",
             json={"input": text, "voice": "Aiden"},
             timeout=90.0,
         )
