@@ -567,13 +567,36 @@ def generate_image(prompt):
         f.write(blob)
     return image_name
 
+def _clean_svg(svg):
+    """Clean up a model-drawn SVG: strip whitespace, fix a trailing extra '>'
+    (models sometimes emit '</svg>>'), and ensure it's a complete document
+    (starts with <svg, ends with </svg>)."""
+    s = (svg or "").strip()
+    # Fix a trailing extra '>' (e.g. "</svg>>" -> "</svg>")
+    while s.endswith(">>"):
+        s = s[:-1]
+    # Ensure it starts with <svg (trim any preamble)
+    low = s.lower()
+    if not low.startswith("<svg"):
+        idx = low.find("<svg")
+        if idx > 0:
+            s = s[idx:]
+    # Ensure it ends with </svg>
+    if not s.lower().endswith("</svg>"):
+        idx = s.lower().rfind("</svg>")
+        if idx > 0:
+            s = s[:idx + len("</svg>")]
+        else:
+            s += "</svg>"
+    return s
+
 def draw_svg(svg):
     """Save a model-drawn SVG document to fe/svg and return its filename.
     The frontend renders it inline (like a generated image)."""
     os.makedirs("fe/svg", exist_ok=True)
     name = uuid.uuid4().hex + ".svg"
     with open(f"fe/svg/{name}", "w") as f:
-        f.write(svg)
+        f.write(_clean_svg(svg))
     return name
 
 async def receive_messages(websocket: websockets.ClientConnection, output_queue):
