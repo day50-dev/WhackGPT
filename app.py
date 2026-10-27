@@ -1832,7 +1832,7 @@ async def chat(data: dict):
                     if looped:
                         _ap_history = [
                             {"role": "system", "content": data.get("context") or "You are a deadpan assistant."},
-                            {"role": "user", "content": "you were repeating the same line over and over again. Acknowledge this deadpan and briefly, in character. Do not repeat anything."},
+                            {"role": "user", "content": "you were repeating the same line over and over again and completely lost your mind. Break out of it in character - unhinged, psychotic, breaking the fourth wall, in the WhackGPT voice. Do NOT just apologize. Do not repeat anything."},
                         ]
                         apology = ""
                         try:
