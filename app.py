@@ -28,7 +28,7 @@ rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
 _topicTs = "convos_ts"
-_model = "blit*27"
+_model = "blit"
 
 # Fire-and-forget work (e.g. titling a new chat) must not delay the response
 # stream. Keep a strong ref so the task isn't garbage collected mid-flight.
@@ -102,6 +102,15 @@ async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=
                     if data == "[DONE]":
                         break
                     yield json.loads(data)
+
+
+def _detect_loop(text, min_len=20):
+    """Return True if any line (of min_len+ chars) appears 2+ times - a sign
+    the model is stuck repeating itself (a runaway loop)."""
+    from collections import Counter
+    lines = [ln.strip() for ln in (text or "").splitlines() if len(ln.strip()) >= min_len]
+    return any(c >= 2 for c in Counter(lines).values())
+
 
 _tools =  [{
     "type": "function",
@@ -1710,6 +1719,7 @@ async def chat(data: dict):
                     ttlResponse = ''
                     tool_calls = []
                     emitted = False
+                    looped = False
                     try:
                         async for chunk in openrouter_stream(openrouter_model, history, _tools, "auto"):
                             choices = chunk.get("choices", [])
@@ -1752,6 +1762,15 @@ async def chat(data: dict):
                             if rds.get(f"beaten:{uid}"):
                                 yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
                                 break
+                            # Runaway loop: the model is repeating the same
+                            # line (of 20+ chars) 2+ times. Clear the mess and
+                            # stop; a deadpan apology is generated in the
+                            # finalization (a fresh model call in the persona's
+                            # voice).
+                            if _detect_loop(ttlResponse + "\n" + allReasoning):
+                                looped = True
+                                yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
+                                break
                         break  # completed this attempt
                     except Exception as e:
                         if emitted:
@@ -1784,6 +1803,31 @@ async def chat(data: dict):
                     return
 
                 if not tool_calls:
+                    # Runaway loop: the model was repeating the same line.
+                    # Generate a deadpan apology in the persona's voice (system
+                    # prompt + a nudge) and use it as the reply.
+                    if looped:
+                        _ap_history = [
+                            {"role": "system", "content": data.get("context") or "You are a deadpan assistant."},
+                            {"role": "user", "content": "you were repeating the same line over and over again. Acknowledge this deadpan and briefly, in character. Do not repeat anything."},
+                        ]
+                        apology = ""
+                        try:
+                            async for _c in openrouter_stream(openrouter_model, _ap_history, None, "auto"):
+                                _ch = _c.get("choices", [])
+                                if _ch:
+                                    apology += _ch[0].get("delta", {}).get("content", "") or ""
+                        except Exception as e:
+                            print(f"apology generation failed: {e}")
+                        ttlResponse = apology.strip() or "SORRY I WAS GOING CRAZY"
+                        _msg = {"role": "assistant", "content": ttlResponse}
+                        if allReasoning:
+                            _msg["reasoning"] = allReasoning
+                        add_to_session(uid, _msg)
+                        run_in_background(rate_and_attach, uid, ttlResponse)
+                        run_in_background(solicit_references, uid, ttlResponse)
+                        run_in_background(ensure_title, uid)
+                        break
                     # Completed text, partial output, or the timeout message -
                     # finalize this turn.
                     raw = rds.get(f"game:{uid}")
