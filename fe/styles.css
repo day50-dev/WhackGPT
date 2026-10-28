@@ -1245,17 +1245,19 @@ textarea {
   }
 
   /* On mobile, images go edge-to-edge (full screen width). The image's
-     normal left edge sits .messages horizontal padding (1rem) + the AI
-     avatar (30px) + the avatar gap (1rem) = 62px right of the screen's
-     left edge; subtract that so the image starts at the screen's left, and
-     set the width to 100vw so it reaches the screen's right edge. */
+     normal left edge sits .messages horizontal padding (1rem) + the
+     .message horizontal padding (1rem) = 32px right of the screen's left
+     edge (there is NO avatar node - .message only ever contains
+     .message-content, so the flex gap never applies); subtract that so the
+     image starts at the screen's left, and set the width to 100vw so it
+     reaches the screen's right edge. */
   .messages {
     overflow-x: hidden; /* let the full-width image bleed to the edges */
   }
   .message-assistant .message-content img {
     width: 100vw;
     max-width: 100vw;
-    margin-left: calc(-1rem - 30px - 1rem);
+    margin-left: calc(-1rem - 1rem);
     padding: 0;
     border-radius: 0;
     box-shadow: none;
