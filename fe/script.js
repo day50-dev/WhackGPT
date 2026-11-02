@@ -1495,6 +1495,43 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
           a.textContent = r.title || r.url;
           box.appendChild(a);
         });
+      } else if (source === "wikihow") {
+        // Article cards: thumbnail (og:image) + title + snippet
+        // (og:description), fetched server-side. A card with no image (or a
+        // dead one) degrades to a text-only card.
+        const list = document.createElement("div");
+        list.className = "wikihow-cards";
+        items.forEach((r) => {
+          const a = document.createElement("a");
+          a.className = "wikihow-card";
+          a.href = r.url;
+          a.target = "_blank";
+          a.rel = "noopener";
+          if (r.image) {
+            const thumb = document.createElement("img");
+            thumb.className = "wikihow-thumb";
+            thumb.src = r.image;
+            thumb.loading = "lazy";
+            thumb.alt = r.title || "WikiHow article preview";
+            thumb.onerror = () => thumb.remove(); // dead og:image -> text-only
+            a.appendChild(thumb);
+          }
+          const body = document.createElement("div");
+          body.className = "wikihow-body";
+          const title = document.createElement("div");
+          title.className = "wikihow-title";
+          title.textContent = r.title || r.url;
+          body.appendChild(title);
+          if (r.snippet) {
+            const sn = document.createElement("div");
+            sn.className = "wikihow-snippet";
+            sn.textContent = r.snippet;
+            body.appendChild(sn);
+          }
+          a.appendChild(body);
+          list.appendChild(a);
+        });
+        box.appendChild(list);
       } else {
         const list = document.createElement("div");
         list.className = "explore-list";

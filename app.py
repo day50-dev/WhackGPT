@@ -2068,6 +2068,28 @@ def _extract_video_id(url):
     return m.group(1) if m else None
 
 
+def _fetch_og(url):
+    """Fetch a page's OpenGraph preview (og:image + og:description) so a link
+    can be shown as a card. A plain GET (no browser) - WikiHow renders these
+    meta tags server-side. Returns {image, snippet}; either may be empty."""
+    try:
+        resp = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"})
+        head = resp.text[:300000]  # og tags live in <head> (WikiHow's is deep)
+    except Exception:
+        return {"image": "", "snippet": ""}
+
+    def og(prop):
+        # <meta property="og:image" content="..."> - attribute order varies.
+        m = re.search(
+            r'<meta[^>]+(?:property|name)=["\']og:' + prop + r'["\'][^>]*content=["\']([^"\']*)["\']',
+            head, re.I) or re.search(
+            r'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|name)=["\']og:' + prop + r'["\']',
+            head, re.I)
+        return html.unescape(m.group(1)).strip() if m else ""
+
+    return {"image": og("image"), "snippet": og("description")}
+
+
 def _explore_query(uid, source, text):
     """Ask the model (with the conversation context) for a good search query
     for YouTube/Reddit - the core subject, not the absurd framing. Falls
@@ -2142,6 +2164,18 @@ async def explore(data: dict):
                 out.append({"title": title, "url": url})
             if len(out) >= 5:
                 break
+    # WikiHow: enrich each article with its OpenGraph preview (thumbnail +
+    # snippet) so the frontend can render cards instead of bare links. Fetched
+    # concurrently; a failure just leaves that card text-only.
+    if source == "wikihow" and out:
+        ogs = await asyncio.gather(
+            *[asyncio.to_thread(_fetch_og, r["url"]) for r in out],
+            return_exceptions=True,
+        )
+        for r, og in zip(out, ogs):
+            if isinstance(og, dict):
+                r["image"] = og.get("image", "")
+                r["snippet"] = og.get("snippet", "")
     return JSONResponse({"source": source, "query": query, "results": out})
 
 @app.get("/history/{id}")
