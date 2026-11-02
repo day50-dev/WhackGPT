@@ -2161,12 +2161,17 @@ async def explore(data: dict):
                              "4chan": ["4chan.org", "4cdn.org"]}
                 if not any(d in url for d in domain_map.get(source, [])):
                     continue
-                out.append({"title": title, "url": url})
+                # snippet from the search itself (always available) - the card
+                # shows it even when a thumbnail can't be fetched.
+                out.append({"title": title, "url": url,
+                           "snippet": r.get("snippet", "")})
             if len(out) >= 5:
                 break
     # WikiHow: enrich each article with its OpenGraph preview (thumbnail +
-    # snippet) so the frontend can render cards instead of bare links. Fetched
-    # concurrently; a failure just leaves that card text-only.
+    # description) so the frontend can render cards. Fetched concurrently; a
+    # failure just leaves that card text-only. (Reddit/4chan sit behind a JS
+    # challenge, so a plain GET returns nothing - their cards use the search
+    # snippet above instead.)
     if source == "wikihow" and out:
         ogs = await asyncio.gather(
             *[asyncio.to_thread(_fetch_og, r["url"]) for r in out],
@@ -2174,8 +2179,10 @@ async def explore(data: dict):
         )
         for r, og in zip(out, ogs):
             if isinstance(og, dict):
-                r["image"] = og.get("image", "")
-                r["snippet"] = og.get("snippet", "")
+                if og.get("image"):
+                    r["image"] = og["image"]
+                if og.get("snippet"):
+                    r["snippet"] = og["snippet"]  # og description is richer
     return JSONResponse({"source": source, "query": query, "results": out})
 
 @app.get("/history/{id}")

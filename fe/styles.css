@@ -655,16 +655,17 @@ table {
   text-decoration: underline;
 }
 
-/* WikiHow article cards: thumbnail (og:image) flush-left + title/snippet
-   (og:description). The thumb stretches to the card height (object-fit crops).
-   A card with no image just shows the padded text body. */
-.wikihow-cards {
+/* Explore result cards (reddit / wikihow / 4chan): thumbnail (og:image,
+   when available) flush-left + title/snippet. The thumb stretches to the
+   card height (object-fit crops). A card with no image just shows the
+   padded text body. */
+.explore-cards {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.75rem 0; /* breathing room at the start + end of the list */
 }
-.wikihow-card {
+.explore-card {
   display: flex;
   align-items: stretch;
   min-height: 72px;
@@ -675,17 +676,17 @@ table {
   color: inherit;
   transition: background 0.15s ease;
 }
-.wikihow-card:hover {
+.explore-card:hover {
   background: var(--pill-hover);
 }
-.wikihow-thumb {
+.explore-card-thumb {
   flex: 0 0 96px;
   width: 96px;
   object-fit: cover;
   display: block;
   background: #000;
 }
-.wikihow-body {
+.explore-card-body {
   flex: 1;
   min-width: 0;
   padding: 0.45rem 0.6rem;
@@ -694,7 +695,7 @@ table {
   gap: 0.2rem;
   justify-content: center;
 }
-.wikihow-title {
+.explore-card-title {
   font-size: 0.74rem;
   font-weight: 600;
   color: var(--text-primary);
@@ -704,7 +705,7 @@ table {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.wikihow-snippet {
+.explore-card-snippet {
   font-size: 0.68rem;
   color: var(--text-secondary);
   line-height: 1.35;

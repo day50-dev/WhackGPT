@@ -1495,53 +1495,42 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
           a.textContent = r.title || r.url;
           box.appendChild(a);
         });
-      } else if (source === "wikihow") {
-        // Article cards: thumbnail (og:image) + title + snippet
-        // (og:description), fetched server-side. A card with no image (or a
-        // dead one) degrades to a text-only card.
+      } else {
+        // Cards (reddit / wikihow / 4chan): thumbnail (og:image, when
+        // available) + title + snippet. WikiHow fetches a real thumbnail
+        // server-side; reddit/4chan (behind a JS challenge) use the search
+        // snippet and render text-only. A card with no image degrades to
+        // title + snippet.
         const list = document.createElement("div");
-        list.className = "wikihow-cards";
+        list.className = "explore-cards";
         items.forEach((r) => {
           const a = document.createElement("a");
-          a.className = "wikihow-card";
+          a.className = "explore-card";
           a.href = r.url;
           a.target = "_blank";
           a.rel = "noopener";
           if (r.image) {
             const thumb = document.createElement("img");
-            thumb.className = "wikihow-thumb";
+            thumb.className = "explore-card-thumb";
             thumb.src = r.image;
             thumb.loading = "lazy";
-            thumb.alt = r.title || "WikiHow article preview";
-            thumb.onerror = () => thumb.remove(); // dead og:image -> text-only
+            thumb.alt = r.title || "preview";
+            thumb.onerror = () => thumb.remove(); // dead image -> text-only
             a.appendChild(thumb);
           }
           const body = document.createElement("div");
-          body.className = "wikihow-body";
+          body.className = "explore-card-body";
           const title = document.createElement("div");
-          title.className = "wikihow-title";
+          title.className = "explore-card-title";
           title.textContent = r.title || r.url;
           body.appendChild(title);
           if (r.snippet) {
             const sn = document.createElement("div");
-            sn.className = "wikihow-snippet";
+            sn.className = "explore-card-snippet";
             sn.textContent = r.snippet;
             body.appendChild(sn);
           }
           a.appendChild(body);
-          list.appendChild(a);
-        });
-        box.appendChild(list);
-      } else {
-        const list = document.createElement("div");
-        list.className = "explore-list";
-        items.forEach((r) => {
-          const a = document.createElement("a");
-          a.className = "explore-link";
-          a.href = r.url;
-          a.target = "_blank";
-          a.rel = "noopener";
-          a.textContent = r.title || r.url;
           list.appendChild(a);
         });
         box.appendChild(list);
