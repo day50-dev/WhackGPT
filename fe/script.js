@@ -1456,11 +1456,6 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
       ttl.className = "explore-title";
       ttl.textContent = TITLES[source] || SERVICE[source];
       box.appendChild(ttl);
-      // What we searched (the model-inferred query) - for transparency.
-      const q = document.createElement("div");
-      q.className = "explore-query";
-      q.textContent = `Searched: \u201c${data.query}\u201d`;
-      box.appendChild(q);
       if (source === "youtube") {
         const vids = items.filter(r => r.video_id);
         const links = items.filter(r => !r.video_id);

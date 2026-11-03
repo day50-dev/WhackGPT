@@ -586,12 +586,6 @@ table {
   font-size: 0.78rem;
   font-weight: 700;
   color: var(--text-primary);
-  margin-bottom: 0.15rem;
-}
-.explore-query {
-  font-size: 0.68rem;
-  color: var(--text-secondary);
-  font-style: italic;
   margin-bottom: 0.3rem;
 }
 .explore-list {
