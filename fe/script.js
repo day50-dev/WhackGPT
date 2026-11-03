@@ -1445,6 +1445,17 @@ async function exploreSource(source, text, resultsEl, btnsEl) {
     if (!items.length) {
       box.textContent = `${SERVICE[source]} has nothing on this (surprising).`;
     } else {
+      // Deadpan source title above the group.
+      const TITLES = {
+        youtube: "YouTube Revelation",
+        reddit: "Reddit Scholarship",
+        wikihow: "WikiHow Wisdom",
+        "4chan": "4chan Foresight",
+      };
+      const ttl = document.createElement("div");
+      ttl.className = "explore-title";
+      ttl.textContent = TITLES[source] || SERVICE[source];
+      box.appendChild(ttl);
       // What we searched (the model-inferred query) - for transparency.
       const q = document.createElement("div");
       q.className = "explore-query";

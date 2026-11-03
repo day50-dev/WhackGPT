@@ -582,6 +582,12 @@ table {
   color: var(--text-secondary);
   display: block;
 }
+.explore-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 0.15rem;
+}
 .explore-query {
   font-size: 0.68rem;
   color: var(--text-secondary);
