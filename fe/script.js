@@ -1395,9 +1395,8 @@ function exploreBlock(text) {
   header.className = "explore-header";
   header.textContent = "Explore more";
   block.appendChild(header);
-  const results = document.createElement("div");
-  results.className = "explore-results";
-  block.appendChild(results);
+  // Buttons come BEFORE results so they stay pinned above the links -
+  // loading a result set below them doesn't shove them out of place.
   const btns = document.createElement("div");
   btns.className = "explore-btns";
   const LABELS = {
@@ -1415,6 +1414,9 @@ function exploreBlock(text) {
     btns.appendChild(b);
   }
   block.appendChild(btns);
+  const results = document.createElement("div");
+  results.className = "explore-results";
+  block.appendChild(results);
   return block;
 }
 
