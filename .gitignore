@@ -3,3 +3,4 @@ __pycache__
 .direnv
 fe/images
 fe/uploads
+fe/svg
