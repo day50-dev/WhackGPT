@@ -591,7 +591,7 @@ const POKER = {
     return st.over ? null : st.phase === "swap-user" ? "user" : "model";
   },
   userPrompt(st) {
-    return "which cards to swap (numbers 1-5, space-separated) or 'none'";
+    return "click up to 3 of your cards, then press swap — or type their numbers (1-5)";
   },
   modelPrompt(st) {
     if (st.phase !== "swap-model") return null;
@@ -638,18 +638,39 @@ const POKER = {
     return /^you win/.test(st.result) ? 200 : /^tie/.test(st.result) ? 100 : 0;
   },
   render(st) {
-    const show = (cards, hidden) => cards.map((c, i) => (hidden && !st.over ? "?" : c)).join("  ");
+    // Selection is per-hand (fingerprint = the user's current 5 cards) so a
+    // re-render on the same deal keeps the user's picks, and a new deal resets
+    // them. Clicking is the primary control; typing numbers still works too.
+    const fp = st.user.join("");
+    if (POKER._fp !== fp) POKER._sel = new Set();
+    POKER._fp = fp;
+    const picking = !st.over && st.phase === "swap-user";
     let html = "<div class='game-hd'>poker <span class='gscore'>" + (st.over ? "" : "5-card draw — " + st.stake + "Đ on the table") + "</span></div>";
-    html += "<div class='game-word'>you: " + show(st.user, false) + "</div>";
-    html += "<div class='game-word'>AI: " + show(st.model, true) + "</div>";
+    // Your hand: clickable cards (1-5) while picking, plain cards after.
+    html += "<div class='pklabel'>you</div><div class='pkrow'>";
+    st.user.forEach((c, i) => {
+      const n = i + 1;
+      if (st.over) { html += "<span class='pkface'>" + gesc(c) + "</span>"; return; }
+      const sel = picking && POKER._sel.has(n);
+      html += "<button class='pkcard" + (sel ? " sel" : "") + "' data-n='" + n + "'>" + gesc(c) + "</button>";
+    });
+    html += "</div>";
+    // AI's hand: face down until the showdown, then revealed.
+    html += "<div class='pklabel'>AI</div><div class='pkrow" + (st.over ? "" : " dim") + "'>" +
+      st.model.map((c) => (st.over ? "<span class='pkface'>" + gesc(c) + "</span>" : "<span class='pkback'>? </span>")).join("") +
+      "</div>";
+    if (picking) {
+      const k = POKER._sel.size;
+      html += "<div class='pkctl'>" +
+        "<button class='pkswap' data-act='swap'>swap" + (k ? " " + k : "") + "</button>" +
+        "<button class='pkkeep' data-act='keep'>keep all</button>" +
+        "<span class='pkhint'>tap up to 3, then swap</span>" +
+        "</div>";
+    }
     if (st.over) html += "<div class='game-meta'>you: " + st.ue.name + " — AI: " + st.me.name + "</div>";
     html += feed(st.log);
     if (st.over) html += "<div class='game-turn'>" + st.result + "</div>";
-    else
-      html +=
-        "<div class='game-turn'>your move — " +
-        (st.phase === "swap-user" ? "type the numbers (1-5) of the cards to swap, or 'none'" : "the AI is deciding its swaps…") +
-        "</div>";
+    else if (!picking) html += "<div class='game-turn'>the AI is deciding its swaps…</div>";
     return html;
   },
 };

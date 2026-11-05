@@ -526,6 +526,7 @@ function renderMessages(messages, doClear) {
     // from the history, so just reset the live state and the dedup set.
     activeGame = null;
     _gameRendered.clear();
+    _lastBoards.clear();
   }
 
   if (messages.some((m) => m.role !== "system")) {
@@ -830,23 +831,68 @@ function handleGameRow(c, live) {
   }
   activeGame = { id: st.id, st };
   updateGamePlaceholder();
-  // The board is a plain div in the conversation flow - appended at this
-  // point in the flow, it scrolls with the chat. A ws replay of a state
-  // we already rendered must not append a second copy.
+  // The board is a plain div in the conversation flow - it scrolls with the
+  // chat. A deal (started) appends a fresh board; a move updates the current
+  // board in place so a game never stacks a new board per state change.
   const already = live && c.tool_call_id && _gameRendered.has(c.tool_call_id);
   if (c.tool_call_id) _gameRendered.add(c.tool_call_id);
-  if (!already) appendGameInline(st);
+  if (already) return;
+  const prev = _lastBoards.get(st.id);
+  // A continuation of a live game (a user or model move, including the move
+  // that ends it) repaints the current board in place. Only a fresh deal
+  // (started) - or the first board - appends a new one.
+  if (!c.started && prev && prev.state && !prev.state.over) {
+    prev.el.innerHTML = GAMES[st.id].render(st) || "";
+    _wireGameBoard(prev.el, st);
+    prev.state = st;
+    prev.el.scrollIntoView({ block: "nearest" });
+  } else {
+    const el = appendGameInline(st);
+    _lastBoards.set(st.id, { el, state: st });
+  }
 }
+
+// The current board element per game id (updated in place on every move so
+// the hand doesn't stack a new board per state change).
+let _lastBoards = new Map();
 
 function appendGameInline(st) {
   const wrap = document.createElement("div");
   wrap.className = "game-inline";
   const board = document.createElement("div");
   board.className = "game-board";
+  board.dataset.game = st.id;
   board.innerHTML = GAMES[st.id].render(st) || "";
+  _wireGameBoard(board, st);
   wrap.appendChild(board);
   messagesContainer.appendChild(wrap);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  return board;
+}
+
+// Poker: click a card to select it (up to 3), then press swap. The button
+// just sends the same move text the typed path uses ("1 3", "keep"), so the
+// server-side referee handles the actual swap - no separate endpoint.
+function _wireGameBoard(board, st) {
+  if (st.id !== "poker") return;
+  board.querySelectorAll(".pkcard, .pkswap, .pkkeep").forEach((el) => {
+    el.addEventListener("click", () => {
+      const G = GAMES.poker;
+      if (st.over) return;
+      const sel = (G._sel = G._sel || new Set());
+      if (el.classList.contains("pkcard")) {
+        const n = Number(el.dataset.n);
+        if (sel.has(n)) sel.delete(n);
+        else if (sel.size < 3) sel.add(n);
+        board.innerHTML = G.render(st) || "";
+        _wireGameBoard(board, st); // re-attach to the fresh nodes
+      } else {
+        el.disabled = true; // guard against double-fire
+        const nums = [...sel].sort((a, b) => a - b);
+        sendMessage(nums.length ? nums.join(" ") : "keep");
+      }
+    });
+  });
 }
 
 function updateGamePlaceholder() {

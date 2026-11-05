@@ -1474,6 +1474,98 @@ textarea {
   font-size: 0.85rem;
 }
 
+/* Poker: clickable card rows. Cards are real <button>s so keyboard/voice
+   work too; up to 3 selected at a time, then swap. */
+.pklabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0.4rem 0 0.2rem;
+}
+.pkrow {
+  display: flex;
+  gap: 0.35rem;
+  margin: 0 0.1rem 0.2rem;
+}
+.pkrow.dim {
+  opacity: 0.7;
+}
+.pkface {
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  padding: 0.35rem 0.45rem;
+  background: var(--pill-bg);
+  border: 2px solid var(--border-color);
+  border-radius: 0.5rem;
+}
+.pkcard {
+  flex: 0 0 auto;
+  min-width: 2.1rem;
+  padding: 0.35rem 0.45rem;
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: var(--pill-bg);
+  border: 2px solid var(--border-color);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.pkcard:hover {
+  background: var(--pill-hover);
+}
+.pkcard.sel {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+  transform: translateY(-2px);
+}
+.pkback {
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  font-size: 1.05rem;
+  padding: 0.35rem 0.45rem;
+  color: var(--text-secondary);
+}
+.pkctl {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.pkswap,
+.pkkeep {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pkswap {
+  background: var(--primary);
+  color: #fff;
+}
+.pkswap:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.pkkeep {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+.pkhint {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
 .pill.game-pill {
   border-color: var(--primary);
   color: var(--primary);
