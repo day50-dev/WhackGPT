@@ -62,7 +62,7 @@ MAGIC_API_BASE = f"http://{_sd_ip}/v1"
 # Inference timeouts: if no chunk arrives within INFER_TIMEOUT seconds (and
 # the connect/write/pool windows), httpx cancels the request so we can retry.
 # A hung stream that started but never completes is bounded, not infinite.
-INFER_TIMEOUT = float(os.environ.get("WHACK_INFER_TIMEOUT", "60"))
+INFER_TIMEOUT = float(os.environ.get("WHACK_INFER_TIMEOUT", "90"))
 INFER_MAX_ATTEMPTS = int(os.environ.get("WHACK_INFER_ATTEMPTS", "3"))
 INFER_RETRY_DELAY = 2.0
 
