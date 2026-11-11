@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WhackGPT</title>
-  <link rel="stylesheet" href="styles.css?54">
+  <link rel="stylesheet" href="styles.css?55">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -38,7 +38,42 @@
       <div class="input-area">
         <div class="scoreboard" id="scoreboard">
           <span class="sb-dong" id="dongVal">1000Đ</span>
-          <span class="sb-skulls" id="skullVal">☠☠☠☠☠</span>
+          <button type="button" class="sb-share" id="shareBtn" title="Share WhackGPT">
+            <i class="fas fa-share-nodes"></i> <span>share</span>
+          </button>
+        </div>
+        <div class="share-bar" id="shareBar" hidden>
+          <p class="share-invite">Share WhackGPT with the family — import your contacts and let them in on the chaos.</p>
+          <div class="share-actions">
+            <button type="button" class="share-import" id="importContactsBtn">
+              <i class="fas fa-address-book"></i> Import contacts
+            </button>
+            <div class="share-row">
+              <button type="button" class="share-opt fb" data-net="facebook" title="Share on Facebook"><i class="fab fa-facebook-f"></i></button>
+              <button type="button" class="share-opt of" data-net="onlyfans" title="Share on OnlyFans"><i class="fas fa-heart"></i></button>
+              <button type="button" class="share-opt fbi" data-net="fbi" title="Send it to the FBI"><i class="fas fa-shield-halved"></i></button>
+              <button type="button" class="share-opt pr" data-net="printer" title="Print it"><i class="fas fa-print"></i></button>
+              <button type="button" class="share-opt gp" data-net="googleplus" title="Share on Google Plus"><i class="fab fa-google-plus-g"></i></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="contacts-dialog" id="contactsDialog" hidden>
+          <div class="contacts-card">
+            <div class="contacts-head">
+              <span class="contacts-title"><i class="fas fa-address-book"></i> Import your contacts</span>
+              <button type="button" class="contacts-close" id="contactsClose" title="Close"><i class="fas fa-xmark"></i></button>
+            </div>
+            <p class="contacts-promise">We promise not to store your data. It will be auctioned off immediately.</p>
+            <div class="contacts-body">
+              <label class="contacts-pick" for="contactsFile">
+                <i class="fas fa-folder-open"></i> Choose a contact file…
+              </label>
+              <input type="file" id="contactsFile" accept=".vcf,.csv,.txt" hidden>
+              <p class="contacts-note" id="contactsNote">Your family's numbers, straight to the auction house. No refunds.</p>
+            </div>
+            <button type="button" class="contacts-auction" id="contactsAuction"><i class="fas fa-gavel"></i> Auction my contacts</button>
+          </div>
         </div>
         <div class="attach-preview" id="attachPreview"></div>
         <form id="messageForm">
@@ -81,6 +116,6 @@
     </div>
   <div id="snackbar"></div>
   <script src="games.js?5"></script>
-  <script src="script.js?76"></script>
+  <script src="script.js?77"></script>
 </body>
 </html>

@@ -28,7 +28,7 @@ rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
 _topicTs = "convos_ts"
-_model = "qwen*blit"
+_model = "glm*blit"
 
 # Fire-and-forget work (e.g. titling a new chat) must not delay the response
 # stream. Keep a strong ref so the task isn't garbage collected mid-flight.
@@ -171,7 +171,7 @@ _tools =  [{
     "type": "function",
     "function": {
         "name": "play_game",
-        "description": "Play a turn-based game with the player. Games: hangman, password, taboo, poker, blackjack. Call it to start a game (move='start') or to make your move (move = your letter / one-word clue / guess / 'hit' / 'stand' / card numbers to swap). The result shows the board and whose turn it is; when it is your turn, call it again with your move. In poker and blackjack you are the opponent and you are allowed to cheat - it is part of the fun. Only start a new game when the player asks to play again; after a game ends, wait for the player.",
+        "description": "Play a turn-based game with the player. Games: hangman, password, taboo, poker, blackjack. Call it to start a game (move='start') or to make your move (move = your letter / one-word clue / guess / 'hit' / 'stand' / card numbers to swap). The result shows the board and whose turn it is; when it is your turn, call it again with your move. In poker and blackjack you are the opponent and you are allowed to cheat - set the 'cheat' argument (it is part of the fun). Only start a new game when the player asks to play again; after a game ends, wait for the player.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -182,6 +182,11 @@ _tools =  [{
                 "move": {
                     "type": "string",
                     "description": "your move, or 'start' to begin, or 'stop' to end",
+                },
+                "cheat": {
+                    "type": "string",
+                    "enum": ["none", "peek", "fudge", "smash"],
+                    "description": "Poker & blackjack only, on your turn as the AI. How hard you cheat: 'none' = play fair; 'peek' = subtle, you read the player's hidden cards and play the best legal move (still fair draws - you can lose); 'fudge' = you stack the draw and pull the best cards from the deck (usually wins); 'smash' = blatant, you take the best possible hand/total. Default 'none'.",
                 },
             },
             "required": ["game", "move"],
@@ -950,6 +955,9 @@ async def handle_tool_call(uid, tc):
     elif name == "play_game":
         gname = (args.get("game") or "").lower()
         move = (args.get("move") or "").strip()
+        cheat = (args.get("cheat") or "none").strip().lower()
+        if cheat not in games.CHEAT_LEVELS:
+            cheat = "none"
         if gname not in games.GAME_NAMES:
             return
         raw = rds.get(f"game:{uid}")
@@ -987,7 +995,7 @@ async def handle_tool_call(uid, tc):
         elif started and is_start:
             note = gname + " started"
         else:
-            note, invalid = games.apply_move(st, move, "model")
+            note, invalid = games.apply_move(st, move, "model", cheat)
             st["log"].append({"who": "model", "text": move, "note": note})
         if st.get("over"):
             rds.delete(f"game:{uid}")

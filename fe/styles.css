@@ -1420,6 +1420,12 @@ textarea {
   margin-right: 0.25rem;
 }
 
+/* the dealer got caught: a small gold flag on the board */
+.game-meta.gcheat {
+  color: #e6b800;
+  font-style: italic;
+}
+
 .gscores {
   display: flex;
   gap: 1rem;
@@ -1586,6 +1592,217 @@ textarea {
   letter-spacing: 0.02em;
 }
 
-.sb-skulls {
-  letter-spacing: 0.1em;
+/* ---- share (replaces the skulls) ---- */
+.sb-share {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--pill-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.sb-share:hover {
+  background: var(--pill-hover);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.sb-share.open {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+.share-bar {
+  padding: 0.25rem 0.5rem 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.share-invite {
+  margin: 0 0 0.4rem;
+}
+
+.share-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.share-import {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.share-import:hover {
+  background: var(--primary-dark);
+}
+
+.share-row {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.share-opt {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  background: var(--pill-bg);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: transform 0.1s, background 0.15s, border-color 0.15s;
+}
+
+.share-opt:hover {
+  transform: translateY(-2px);
+  border-color: var(--text-secondary);
+}
+
+.share-opt.fb:hover { background: #1877f2; border-color: #1877f2; }
+.share-opt.of:hover { background: #00aff0; border-color: #00aff0; }
+.share-opt.fbi:hover { background: #b91c1c; border-color: #b91c1c; }
+.share-opt.pr:hover { background: var(--text-secondary); border-color: var(--text-secondary); }
+.share-opt.gp:hover { background: #dd4b39; border-color: #dd4b39; }
+
+/* ---- import contacts dialog (auction house) ---- */
+.contacts-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 1rem;
+}
+
+/* the [hidden] attribute must win over the display:flex above */
+.contacts-dialog[hidden] {
+  display: none;
+}
+
+.share-bar[hidden] {
+  display: none;
+}
+
+.contacts-card {
+  width: 100%;
+  max-width: 22rem;
+  background: var(--slightly-lighter);
+  border: 1px solid var(--border-color);
+  border-radius: 0.75rem;
+  padding: 1rem 1.1rem;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+
+.contacts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.contacts-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.contacts-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.15rem;
+  line-height: 1;
+}
+
+.contacts-close:hover {
+  color: var(--text-primary);
+}
+
+.contacts-promise {
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.contacts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+.contacts-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--input-bg);
+  border: 1px dashed var(--border-color);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.contacts-pick:hover {
+  border-color: var(--text-secondary);
+  background: var(--pill-hover);
+}
+
+.contacts-note {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.contacts-auction {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: #b91c1c;
+  color: #fff;
+  border: none;
+  border-radius: 0.5rem;
+  padding: 0.55rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.contacts-auction:hover {
+  background: #991b1b;
+}
+
+.contacts-auction.done {
+  background: var(--primary);
 }

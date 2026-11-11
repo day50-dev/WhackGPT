@@ -5,6 +5,12 @@
 import json
 import random
 import re
+from itertools import combinations
+
+# How the AI may cheat when it is the opponent (poker / blackjack). "Part of
+# the fun" - the level is chosen by the model on its tool call via the play_game
+# 'cheat' argument. Levels are honest about how far they reach into the deck.
+CHEAT_LEVELS = ("none", "peek", "fudge", "smash")
 
 HANG_WORDS = [
     "router", "stream", "planet", "coffee", "guitar", "python", "forest", "rocket", "silver", "castle",
@@ -183,13 +189,76 @@ def eval5(cards):
 def cmp_hand(a, b):
     if a["rank"] != b["rank"]:
         return a["rank"] - b["rank"]
-    n = max(len(a["tb"]), len(b["tb"]))
+    # same rank: tiebreak by group count first, then by the tiebreak values.
+    # (tb shape differs between hand types - e.g. four-of-a-kind is [[4,14],[1,10]]
+    # vs high card [14,13,12,11,10] - so compare count, then the flat value lists.)
+    av, bv = _tiebreak_values(a), _tiebreak_values(b)
+    n = max(len(av), len(bv))
     for i in range(n):
-        x = a["tb"][i] if i < len(a["tb"]) else 0
-        y = b["tb"][i] if i < len(b["tb"]) else 0
+        x = av[i] if i < len(av) else 0
+        y = bv[i] if i < len(bv) else 0
         if x != y:
             return x - y
     return 0
+
+
+def _tiebreak_values(h):
+    """Flatten a hand's tb into a comparable list: group counts first, then
+    the tiebreak values in order - so any two hands of the same rank compare
+    correctly even when their raw tb shapes differ."""
+    tb = h["tb"]
+    if tb and isinstance(tb[0], (list, tuple)):
+        # group form: [[count, value], ...] -> counts then values
+        counts = [g[0] for g in tb]
+        values = [g[1] for g in tb]
+        return counts + values
+    return list(tb)
+
+
+# Fast hand rank for the cheat search: returns a comparable tuple where a
+# higher tuple always beats a lower one. Cheaper than eval5 (no dicts), used
+# only to compare candidate hands in _poker_cheat; eval5 is still used for the
+# human-readable result. Tuples are lexicographic, most-significant first.
+def _hand_key(cards):
+    from collections import Counter
+    vals = sorted((rank_value(c) for c in cards), reverse=True)
+    uniq = sorted(set(vals), reverse=True)
+    suits = {c[-1] for c in cards}
+    flush = len(suits) == 1
+    straight = None
+    if len(uniq) == 5:
+        if uniq[0] - uniq[4] == 4:
+            straight = uniq[0]
+        elif uniq[0] == 14 and uniq[1] == 5 and uniq[4] == 2:
+            straight = 5
+    counts = Counter(vals)
+    groups = sorted(counts.items(), key=lambda kv: (-kv[1], -kv[0]))  # (val, count)
+    ngroups = len(groups)
+    nmax = max(counts.values())
+    if flush and straight:
+        return (8, [straight])
+    if nmax == 4:
+        return (7, [groups[0][0], groups[1][0]])
+    if nmax == 3 and ngroups == 2:
+        return (6, [groups[0][0], groups[1][0]])
+    if flush:
+        return (5, vals)
+    if straight is not None:
+        return (4, [straight])
+    if nmax == 3:
+        trip = groups[0][0]
+        kick = sorted([v for v, _ in groups if v != trip], reverse=True)
+        return (3, [trip] + kick)
+    if ngroups == 3 and nmax == 2:
+        # two pair: the two pair values (high first) + the kicker
+        hi = sorted([v for v, c in groups if c == 2], reverse=True)
+        kick = sorted([v for v, c in groups if c == 1], reverse=True)
+        return (2, hi + kick)
+    if nmax == 2:
+        pair = [v for v, c in groups if c == 2][0]
+        kick = sorted([v for v, c in groups if c == 1], reverse=True)
+        return (1, [pair] + kick)
+    return (0, vals)
 
 
 # ---- state construction ----
@@ -223,7 +292,7 @@ def new_state(name):
         deck = new_deck()
         st = {
             "id": "poker", "phase": "swap-user", "deck": deck, "user": [], "model": [],
-            "log": [], "over": False, "result": "", "stake": 100,
+            "log": [], "over": False, "result": "", "stake": 100, "cheats": [],
         }
         for _ in range(5):
             st["user"].append(deck.pop())
@@ -233,7 +302,7 @@ def new_state(name):
         deck = new_deck()
         st = {
             "id": "blackjack", "phase": "user", "deck": deck, "user": [], "model": [],
-            "log": [], "over": False, "result": "", "stake": 100,
+            "log": [], "over": False, "result": "", "stake": 100, "cheats": [],
         }
         st["user"].append(deck.pop())
         st["model"].append(deck.pop())
@@ -381,9 +450,175 @@ def auto_move(st):
     return None
 
 
+# ---- AI cheating (poker / blackjack) ---------------------------------
+# The model picks a level on its play_game call via the 'cheat' argument:
+#   peek   - subtle: it reads your hidden cards and plays the best legal move
+#            (real deck, natural draws) - it can still lose.
+#   fudge  - stacked: it keeps its best cards and pulls the best replacements
+#            from anywhere in the deck (up to 3) - usually wins.
+#   smash  - blatant: it just takes the single best hand/total possible.
+# Cheating only applies on the AI's own turn, and only to poker/blackjack.
+
+def _bj_result(st):
+    ut, mt = bj_total(st["user"]), bj_total(st["model"])
+    if ut == mt:
+        return "push - both " + str(ut) + " - pot returned"
+    if ut > mt:
+        return "you win " + str(ut) + " to " + str(mt) + " - pot is yours"
+    return "the dealer wins " + str(mt) + " to " + str(ut) + " - the AI takes the pot"
+
+
+def _bj_best_draw(hand, deck):
+    """The single card in deck that most raises bj_total without busting,
+    or None if no card improves the total."""
+    base = bj_total(hand)
+    best, bestv = None, base
+    for c in deck:
+        t = bj_total(hand + [c])
+        if t <= 21 and t > bestv:
+            best, bestv = c, t
+    return best
+
+
+def _bj_cheat(st, mode):
+    """AI's cheating move in blackjack: draw toward winning, then stand."""
+    hand = list(st["model"])
+    deck = st["deck"]
+    ut = bj_total(st["user"])
+    if mode == "peek":
+        # sees the next card; takes natural cards only while they improve + keep <=21
+        while bj_total(hand) <= ut and bj_total(hand) < 21:
+            nxt = deck[-1]
+            nt = bj_total(hand + [nxt])
+            if nt > 21 or nt <= bj_total(hand):
+                break
+            hand.append(deck.pop())
+    elif mode == "fudge":
+        # stacked draw: best card each step until it beats you
+        while bj_total(hand) <= ut:
+            c = _bj_best_draw(hand, deck)
+            if c is None:
+                break
+            hand.append(c)
+            deck.remove(c)
+    else:  # smash
+        # blatant: the best total <= 21 it can assemble (usually 21)
+        while True:
+            c = _bj_best_draw(hand, deck)
+            if c is None:
+                break
+            hand.append(c)
+            deck.remove(c)
+    st["model"] = hand
+    st.setdefault("cheats", []).append("blackjack:" + mode)
+    st["over"] = True
+    st["result"] = _bj_result(st)
+    won = st["result"].startswith("the dealer wins")
+    return "the dealer cheats (" + mode + ")" + ("" if won else " - and still loses") + ": " + st["result"], False
+
+
+def _cmp_key(a, b):
+    """Compare two _hand_key tuples: True if a strictly beats b. The first
+    element is always the rank (int); the rest is either an int (straight
+    ranks) or a list of values - same shape within a rank."""
+    if a[0] != b[0]:
+        return a[0] > b[0]
+    if a[0] in (8, 4):  # straight-flush / straight: tiebreak is the high card (int)
+        return a[1] > b[1]
+    a1, b1 = list(a[1]), list(b[1])
+    for i in range(max(len(a1), len(b1))):
+        x = a1[i] if i < len(a1) else 0
+        y = b1[i] if i < len(b1) else 0
+        if x != y:
+            return x > y
+    return False
+
+
+def _best5(pool):
+    """The best 5-card poker hand (list of cards) from `pool`, brute force."""
+    best = None
+    for c in combinations(pool, 5):
+        cand = list(c)
+        e = _hand_key(cand)
+        if best is None or _cmp_key(e, best[1]):
+            best = (cand, e)
+            if e[0] == 8 and e[1] == [14]:  # royal flush - can't do better
+                break
+    return list(best[0]) if best else list(pool[:5])
+
+
+def _best_k_fill(kept, deck, keepcount):
+    """Best 5-card hand that contains exactly the `kept` cards and fills the
+    rest with the best available cards from `deck`."""
+    need = 5 - len(kept)
+    if need == 0:
+        return list(kept)
+    best = None
+    for fill in combinations(deck, need):
+        cand = list(kept) + list(fill)
+        e = _hand_key(cand)
+        if best is None or _cmp_key(e, best[1]):
+            best = (cand, e)
+            if e[0] == 8 and e[1] == [14]:  # royal flush - can't do better
+                break
+    return list(best[0]) if best else list(kept) + list(deck[:need])
+
+
+def _poker_cheat(st, mode):
+    """AI's cheating move in poker: set its hand to the best it can, showdown."""
+    model = list(st["model"])
+    deck = st["deck"]
+    pool = deck[:20] if len(deck) > 20 else list(deck)  # cap the search pool
+    best = list(model)
+    if mode == "peek":
+        # best swap of <=3 using the NATURAL top-of-deck draws (still fair cards)
+        for k in range(0, 4):
+            drawn = list(deck[:k])
+            for disc in combinations(range(5), k):
+                cand = [model[i] for i in range(5) if i not in disc] + drawn
+                if len(cand) == 5 and _cmp_key(_hand_key(cand), _hand_key(best)):
+                    best = cand
+    elif mode == "fudge":
+        # keep up to 2 original cards, pull the best (5-k) from the deck
+        for keepcount in (2, 3, 4, 5):
+            for kept in combinations(range(5), keepcount):
+                cand = _best_k_fill([model[i] for i in kept], pool, keepcount)
+                if len(cand) == 5 and _cmp_key(_hand_key(cand), _hand_key(best)):
+                    best = cand
+    else:  # smash
+        cand = _best5(pool)
+        if len(cand) == 5 and _cmp_key(_hand_key(cand), _hand_key(best)):
+            best = cand
+    # consume the deck cards the cheat pulled in, so state stays consistent
+    used = [c for c in best if c in deck and c not in model]
+    for c in used:
+        deck.remove(c)
+    st["model"] = best
+    st.setdefault("cheats", []).append("poker:" + mode)
+    r = _set_poker_result(st)
+    won = r.startswith("the AI wins")
+    return "the dealer cheats (" + mode + ")" + ("" if won else " - and still loses") + ": " + r, False
+
+
+def _set_poker_result(st):
+    st["ue"] = eval5(st["user"])
+    st["me"] = eval5(st["model"])
+    c = cmp_hand(st["ue"], st["me"])
+    st["over"] = True
+    st["result"] = (
+        "you win: " + st["ue"]["name"] + " beats " + st["me"]["name"] + " - pot is yours"
+        if c > 0
+        else "the AI wins: " + st["me"]["name"] + " beats " + st["ue"]["name"]
+        if c < 0
+        else "tie - pot returned"
+    )
+    return st["result"]
+
+
 # ---- the rules ----
-def apply_move(st, text, who):
-    """Apply one move. Returns (note, invalid)."""
+def apply_move(st, text, who, cheat="none"):
+    """Apply one move. Returns (note, invalid). `cheat` (poker/blackjack, AI
+    turn only) is one of CHEAT_LEVELS and bends the game in the AI's favor."""
     i = st["id"]
     if i == "hangman":
         return _apply_hangman(st, text, who)
@@ -392,9 +627,9 @@ def apply_move(st, text, who):
     if i == "taboo":
         return _apply_taboo(st, text, who)
     if i == "poker":
-        return _apply_poker(st, text, who)
+        return _apply_poker(st, text, who, cheat)
     if i == "blackjack":
-        return _apply_blackjack(st, text, who)
+        return _apply_blackjack(st, text, who, cheat)
     return "unknown game", True
 
 
@@ -574,7 +809,7 @@ def _parse_poker_nums(text):
     return found
 
 
-def _apply_poker(st, text, who):
+def _apply_poker(st, text, who, cheat="none"):
     t = (text or "").strip().lower()
     if t in ("none", "nothing", "keep", "keep all", "keep them", "keep them all",
              "no swap", "no swaps", "all", "them all", "all of them"):
@@ -591,26 +826,17 @@ def _apply_poker(st, text, who):
         st["phase"] = "swap-model"
         return "you swap " + (str(len(nums)) if nums else "nothing") + " - the AI's move", False
     if who == "model" and st["phase"] == "swap-model":
+        if cheat in ("peek", "fudge", "smash"):
+            return _poker_cheat(st, cheat)
         st["modelSwaps"] = len(nums)
         for n in nums:
             st["model"][n - 1] = st["deck"].pop()
         # showdown - the board is the referee
-        st["ue"] = eval5(st["user"])
-        st["me"] = eval5(st["model"])
-        c = cmp_hand(st["ue"], st["me"])
-        st["over"] = True
-        st["result"] = (
-            "you win: " + st["ue"]["name"] + " beats " + st["me"]["name"] + " - pot is yours"
-            if c > 0
-            else "the AI wins: " + st["me"]["name"] + " beats " + st["ue"]["name"]
-            if c < 0
-            else "tie - pot returned"
-        )
-        return st["result"], False
+        return _set_poker_result(st), False
     return "not your move", True
 
 
-def _apply_blackjack(st, text, who):
+def _apply_blackjack(st, text, who, cheat="none"):
     t = (text or "").lower().strip()
     if t not in ("hit", "stand", "h", "s"):
         return "say 'hit' or 'stand'", True
@@ -635,6 +861,8 @@ def _apply_blackjack(st, text, who):
             else "your total: " + str(bj_total(st["user"])) + " - dealer's move"
         ), False
     if who == "model" and st["phase"] == "model":
+        if cheat in ("peek", "fudge", "smash"):
+            return _bj_cheat(st, cheat)
         if hit:
             st["model"].append(st["deck"].pop())
             tot = bj_total(st["model"])
@@ -647,15 +875,8 @@ def _apply_blackjack(st, text, who):
             else:
                 st["phase"] = "user"
         else:
-            ut, mt = bj_total(st["user"]), bj_total(st["model"])
             st["over"] = True
-            st["result"] = (
-                "push - both " + str(ut) + " - pot returned"
-                if ut == mt
-                else "you win " + str(ut) + " to " + str(mt) + " - pot is yours"
-                if ut > mt
-                else "the dealer wins " + str(mt) + " to " + str(ut) + " - the AI takes the pot"
-            )
+            st["result"] = _bj_result(st)
         return (
             st["result"]
             if st["over"]
@@ -717,7 +938,9 @@ def board_text(st):
                 + "; player: " + " ".join(st["user"]) + " (" + st["ue"]["name"] + ")"
             )
         turn = (
-            "YOUR turn - swap up to 3 cards (reply with card numbers 1-5, or 'none')"
+            "YOUR turn - swap up to 3 cards (reply with card numbers 1-5, or 'none'). "
+            "You are the dealer and you MAY cheat - set the tool's cheat argument to "
+            "peek (read their cards, play it fair), fudge (stack the draw), or smash (take the best hand). "
             if st["phase"] == "swap-model"
             else "the player's turn"
         )
@@ -729,7 +952,11 @@ def board_text(st):
                 + "; your hand: " + " ".join(st["model"]) + " (" + str(bj_total(st["model"])) + ")"
                 + "; player: " + " ".join(st["user"]) + " (" + str(bj_total(st["user"])) + ")"
             )
-        turn = "YOUR turn - 'hit' or 'stand'" if st["phase"] == "model" else "the player's turn"
+        turn = (
+            "YOUR turn - 'hit' or 'stand'. You are the dealer and you MAY cheat - set the "
+            "tool's cheat argument to peek (read their cards), fudge (stack the draw), or smash (take 21). "
+            if st["phase"] == "model" else "the player's turn"
+        )
         # open table: the dealer sees everything
         return (
             "blackjack - your hand: " + " ".join(st["model"]) + " (" + str(bj_total(st["model"])) + ")"

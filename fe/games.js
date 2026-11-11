@@ -668,6 +668,7 @@ const POKER = {
         "</div>";
     }
     if (st.over) html += "<div class='game-meta'>you: " + st.ue.name + " — AI: " + st.me.name + "</div>";
+    if ((st.cheats || []).length) html += "<div class='game-meta gcheat'>the AI cheated: " + st.cheats.map(c => c.split(":")[1]).join(", ") + "</div>";
     html += feed(st.log);
     if (st.over) html += "<div class='game-turn'>" + st.result + "</div>";
     else if (!picking) html += "<div class='game-turn'>the AI is deciding its swaps…</div>";
@@ -754,6 +755,7 @@ const BLACKJACK = {
     let html = "<div class='game-hd'>blackjack <span class='gscore'>" + (st.over ? "" : st.stake + "Đ on the table") + "</span></div>";
     html += "<div class='game-word'>you: " + st.user.join(" ") + " <b>(" + bjTotal(st.user) + ")</b></div>";
     html += "<div class='game-word'>AI: " + mStr + " <b>(" + mTot + ")</b></div>";
+    if ((st.cheats || []).length) html += "<div class='game-meta gcheat'>the dealer cheated: " + st.cheats.map(c => c.split(":")[1]).join(", ") + "</div>";
     html += feed(st.log);
     if (st.over) html += "<div class='game-turn'>" + st.result + "</div>";
     else
