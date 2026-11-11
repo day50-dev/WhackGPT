@@ -1579,6 +1579,7 @@ textarea {
 
 /* ---- scoreboard (dong + skulls) above the input box ---- */
 .scoreboard {
+  position: relative;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1590,9 +1591,21 @@ textarea {
 
 .sb-dong {
   letter-spacing: 0.02em;
+  margin-right: auto;
 }
 
 /* ---- share (replaces the skulls) ---- */
+.sb-lie {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.72rem;
+  font-style: italic;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  letter-spacing: 0.02em;
+}
+
 .sb-share {
   display: inline-flex;
   align-items: center;
@@ -1619,118 +1632,63 @@ textarea {
   border-color: var(--primary);
 }
 
-.share-bar {
-  padding: 0.25rem 0.5rem 0.4rem;
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-}
-
-.share-invite {
-  margin: 0 0 0.4rem;
-}
-
-.share-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.share-import {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: var(--primary);
-  color: #fff;
-  border: none;
-  border-radius: 999px;
-  padding: 0.3rem 0.8rem;
-  font-size: 0.78rem;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.share-import:hover {
-  background: var(--primary-dark);
-}
-
-.share-row {
-  display: flex;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-}
-
-.share-opt {
-  width: 2rem;
-  height: 2rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  border: 1px solid var(--border-color);
-  background: var(--pill-bg);
-  color: var(--text-primary);
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: transform 0.1s, background 0.15s, border-color 0.15s;
-}
-
-.share-opt:hover {
-  transform: translateY(-2px);
-  border-color: var(--text-secondary);
-}
-
-.share-opt.fb:hover { background: #1877f2; border-color: #1877f2; }
-.share-opt.of:hover { background: #00aff0; border-color: #00aff0; }
-.share-opt.fbi:hover { background: #b91c1c; border-color: #b91c1c; }
-.share-opt.pr:hover { background: var(--text-secondary); border-color: var(--text-secondary); }
-.share-opt.gp:hover { background: #dd4b39; border-color: #dd4b39; }
-
-/* ---- import contacts dialog (auction house) ---- */
-.contacts-dialog {
+/* ---- share lightbox ---- */
+.share-lb {
   position: fixed;
   inset: 0;
-  z-index: 90;
+  z-index: 3000;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
   padding: 1rem;
 }
 
 /* the [hidden] attribute must win over the display:flex above */
-.contacts-dialog[hidden] {
+.share-lb[hidden] {
   display: none;
 }
 
-.share-bar[hidden] {
-  display: none;
+.share-lb-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(3px);
+  animation: shareLbFade 0.18s ease;
 }
 
-.contacts-card {
+.share-lb-card {
+  position: relative;
   width: 100%;
-  max-width: 22rem;
+  max-width: 24rem;
   background: var(--slightly-lighter);
   border: 1px solid var(--border-color);
-  border-radius: 0.75rem;
-  padding: 1rem 1.1rem;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  border-radius: 0.9rem;
+  padding: 1.1rem 1.15rem 1.25rem;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  animation: shareLbPop 0.2s ease;
 }
 
-.contacts-head {
+@keyframes shareLbFade { from { opacity: 0; } to { opacity: 1; } }
+
+@keyframes shareLbPop {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.share-lb-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
 }
 
-.contacts-title {
-  font-size: 0.9rem;
+.share-lb-title {
+  font-size: 0.95rem;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.contacts-close {
+.share-lb-close {
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -1740,69 +1698,146 @@ textarea {
   line-height: 1;
 }
 
-.contacts-close:hover {
+.share-lb-close:hover {
   color: var(--text-primary);
 }
 
-.contacts-promise {
-  margin: 0.5rem 0 0.75rem;
+.share-lb-invite {
+  margin: 0.45rem 0 0.8rem;
   font-size: 0.8rem;
   color: var(--text-secondary);
-  font-style: italic;
 }
 
-.contacts-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-bottom: 0.85rem;
-}
-
-.contacts-pick {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--input-bg);
-  border: 1px dashed var(--border-color);
-  border-radius: 0.5rem;
-  padding: 0.55rem 0.7rem;
-  font-size: 0.8rem;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.contacts-pick:hover {
-  border-color: var(--text-secondary);
-  background: var(--pill-hover);
-}
-
-.contacts-note {
-  margin: 0;
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-}
-
-.contacts-auction {
+.share-lb-import {
   width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  background: #b91c1c;
+  background: var(--primary);
   color: #fff;
   border: none;
   border-radius: 0.5rem;
-  padding: 0.55rem;
+  padding: 0.6rem;
   font-size: 0.85rem;
+  font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
 }
 
-.contacts-auction:hover {
-  background: #991b1b;
+.share-lb-import:hover {
+  background: var(--primary-dark);
 }
 
-.contacts-auction.done {
-  background: var(--primary);
+.share-lb-import svg {
+  flex-shrink: 0;
+}
+
+.share-lb-promise {
+  margin: 0.55rem 0 0;
+  font-size: 0.72rem;
+  font-style: italic;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.share-lb-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.72rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.share-lb-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.95rem 0 0.7rem;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.share-lb-divider::before,
+.share-lb-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+.share-lb-links {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.share-opt {
+  width: 2.6rem;
+  height: 2.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: #fff;
+  padding: 0.35rem;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.15s;
+}
+
+.share-opt img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.share-opt:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+/* ---- share bar (below the input, replaces the old disclaimer) ---- */
+.share-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.share-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 0.15rem 0.35rem;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.share-bar .share-open {
+  margin-left: auto;
+}
+
+.share-bar button:hover {
+  color: var(--text-primary);
+  background: var(--pill-hover);
+}
+
+.share-bar button.done {
+  color: var(--primary);
+}
+
+.share-sep {
+  opacity: 0.5;
 }

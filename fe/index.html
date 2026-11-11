@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WhackGPT</title>
-  <link rel="stylesheet" href="styles.css?55">
+  <link rel="stylesheet" href="styles.css?57">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -36,45 +36,33 @@
       </div>
       
       <div class="input-area">
-        <div class="scoreboard" id="scoreboard">
-          <span class="sb-dong" id="dongVal">1000Đ</span>
-          <button type="button" class="sb-share" id="shareBtn" title="Share WhackGPT">
-            <i class="fas fa-share-nodes"></i> <span>share</span>
-          </button>
-        </div>
-        <div class="share-bar" id="shareBar" hidden>
-          <p class="share-invite">Share WhackGPT with the family — import your contacts and let them in on the chaos.</p>
-          <div class="share-actions">
-            <button type="button" class="share-import" id="importContactsBtn">
-              <i class="fas fa-address-book"></i> Import contacts
-            </button>
-            <div class="share-row">
-              <button type="button" class="share-opt fb" data-net="facebook" title="Share on Facebook"><i class="fab fa-facebook-f"></i></button>
-              <button type="button" class="share-opt of" data-net="onlyfans" title="Share on OnlyFans"><i class="fas fa-heart"></i></button>
-              <button type="button" class="share-opt fbi" data-net="fbi" title="Send it to the FBI"><i class="fas fa-shield-halved"></i></button>
-              <button type="button" class="share-opt pr" data-net="printer" title="Print it"><i class="fas fa-print"></i></button>
-              <button type="button" class="share-opt gp" data-net="googleplus" title="Share on Google Plus"><i class="fab fa-google-plus-g"></i></button>
-            </div>
-          </div>
-        </div>
 
-        <div class="contacts-dialog" id="contactsDialog" hidden>
-          <div class="contacts-card">
-            <div class="contacts-head">
-              <span class="contacts-title"><i class="fas fa-address-book"></i> Import your contacts</span>
-              <button type="button" class="contacts-close" id="contactsClose" title="Close"><i class="fas fa-xmark"></i></button>
+        <div class="share-lb" id="shareLightbox" hidden>
+          <div class="share-lb-backdrop" id="shareBackdrop"></div>
+          <div class="share-lb-card">
+            <div class="share-lb-head">
+              <span class="share-lb-title">Share WhackGPT</span>
+              <button type="button" class="share-lb-close" id="shareLbClose" title="Close"><i class="fas fa-xmark"></i></button>
             </div>
-            <p class="contacts-promise">We promise not to store your data. It will be auctioned off immediately.</p>
-            <div class="contacts-body">
-              <label class="contacts-pick" for="contactsFile">
-                <i class="fas fa-folder-open"></i> Choose a contact file…
-              </label>
-              <input type="file" id="contactsFile" accept=".vcf,.csv,.txt" hidden>
-              <p class="contacts-note" id="contactsNote">Your family's numbers, straight to the auction house. No refunds.</p>
+            <p class="share-lb-invite">Import your contacts and share WhackGPT with your family. They deserve this.</p>
+            <button type="button" class="share-lb-import" id="importContactsBtn">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M19 1h-8.5a1.5 1.5 0 0 0-1.5 1.5v2a1.5 1.5 0 0 0 1.5 1.5h8.5a1.5 1.5 0 0 0 1.5-1.5v-2a1.5 1.5 0 0 0-1.5-1.5zm-11 4v-2h7v2zm11 4h-8.5a1.5 1.5 0 0 0-1.5 1.5v2a1.5 1.5 0 0 0 1.5 1.5h8.5a1.5 1.5 0 0 0 1.5-1.5v-2a1.5 1.5 0 0 0-1.5-1.5zm-11 4v-2h7v2zm11 4h-8.5a1.5 1.5 0 0 0-1.5 1.5v2a1.5 1.5 0 0 0 1.5 1.5h8.5a1.5 1.5 0 0 0 1.5-1.5v-2a1.5 1.5 0 0 0-1.5-1.5zm-11 4v-2h7v2z"/></svg>
+              Import
+            </button>
+            <p class="share-lb-promise">We promise not to store your data. It will be auctioned off immediately.</p>
+            <p class="share-lb-note" id="contactsNote"></p>
+            <div class="share-lb-divider"><span>or share it on</span></div>
+            <div class="share-lb-links">
+              <button type="button" class="share-opt" title="Copy to clipboard" aria-label="Copy to clipboard" onclick="share.copyLink(this)"><i class="fas fa-link"></i></button>
+              <button type="button" class="share-opt" data-net="facebook" title="Share on Facebook" aria-label="Facebook"><img src="logo-facebook.svg" alt="Facebook"></button>
+              <button type="button" class="share-opt" data-net="onlyfans" title="Share on OnlyFans" aria-label="OnlyFans"><img src="logo-of.svg" alt="OnlyFans"></button>
+              <button type="button" class="share-opt" data-net="fbi" title="Send it to the FBI" aria-label="the FBI"><img src="fbi.jpg" alt="the FBI"></button>
+              <button type="button" class="share-opt" data-net="printer" title="Print it" aria-label="Print"><img src="logo-printer.svg" alt="Print"></button>
+              <button type="button" class="share-opt" data-net="googleplus" title="Share on Google Plus" aria-label="Google Plus"><img src="logo-gp.svg" alt="Google Plus"></button>
             </div>
-            <button type="button" class="contacts-auction" id="contactsAuction"><i class="fas fa-gavel"></i> Auction my contacts</button>
           </div>
         </div>
+        <input type="file" id="contactsFile" accept=".vcf,.csv,.txt" hidden>
         <div class="attach-preview" id="attachPreview"></div>
         <form id="messageForm">
           <div class="command-popup" id="commandPopup"></div>
@@ -95,7 +83,12 @@
           </div>
         </form>
         <input type="file" id="fileInput" accept="image/*" multiple hidden>
-        <p class="disclaimer">This is shared chaos. Nothing is private. Everything is a lie.</p>
+        <div class="share-bar" id="shareBar">
+          <span class="sb-dong" id="dongVal">1000Đ</span>
+          <span class="sb-lie">everything is a lie</span>
+          
+          <button type="button" class="share-open" id="shareBtn" title="Share WhackGPT"><i class="fas fa-share-nodes"></i> share</button>
+        </div>
       </div>
     </main>
     <div class="hamburger-menu">
@@ -116,6 +109,6 @@
     </div>
   <div id="snackbar"></div>
   <script src="games.js?5"></script>
-  <script src="script.js?77"></script>
+  <script src="script.js?79"></script>
 </body>
 </html>

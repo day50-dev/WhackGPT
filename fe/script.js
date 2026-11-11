@@ -150,26 +150,82 @@ function renderScoreboard() {
 // purely for the vibes: it promises not to store your data and instead
 // auctions it off immediately. ----
 const share = {
-  bar() { return document.getElementById("shareBar"); },
+  lb() { return document.getElementById("shareLightbox"); },
   btn() { return document.getElementById("shareBtn"); },
   toggle() {
-    const bar = share.bar(), btn = share.btn();
-    if (!bar || !btn) return;
-    const open = bar.hasAttribute("hidden");
-    if (open) bar.removeAttribute("hidden"); else bar.setAttribute("hidden", "");
+    const lb = share.lb(), btn = share.btn();
+    if (!lb || !btn) return;
+    const open = lb.hasAttribute("hidden");
+    if (open) lb.removeAttribute("hidden"); else lb.setAttribute("hidden", "");
     btn.classList.toggle("open", open);
   },
   close() {
-    const bar = share.bar(), btn = share.btn();
-    if (bar) bar.setAttribute("hidden", "");
+    const lb = share.lb(), btn = share.btn();
+    if (lb) lb.setAttribute("hidden", "");
     if (btn) btn.classList.remove("open");
   },
   pageUrl() {
     // share the current page without the hash (session ids live in the hash)
     return window.location.origin + window.location.pathname;
   },
+  chatUrl() {
+    // the current chat: same page but keep the hash so the session id travels
+    const base = share.pageUrl();
+    return _uid ? base + "#" + _uid : base;
+  },
+  copy(text, done) {
+    const ok = () => { if (done) done(); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(ok).catch(() => share._copyFallback(text, ok));
+    } else {
+      share._copyFallback(text, ok);
+    }
+  },
+  _copyFallback(text, ok) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+    ok();
+  },
+  topic() {
+    const el = document.querySelector(".topic-item.active .topic-title");
+    return el ? el.textContent.trim() : "";
+  },
+  shareText() {
+    const t = share.topic();
+    const about = t ? ' about "' + t + '"' : "";
+    return "WhackGPT, the best and most accurate chat ever, has amazing things to say" + about + " " + share.chatUrl();
+  },
+  copyLink(btn) {
+    share.copy(share.shareText(), () => {
+      snackbar("Copied to clipboard.");
+      if (btn) share._flash(btn, "copied");
+    });
+  },
+  shareChat(btn) {
+    const url = share.chatUrl();
+    if (navigator.share) {
+      navigator.share({ title: "WhackGPT", text: "Look at this chaos", url }).catch(() => {});
+    } else {
+      share.copy(url, () => {
+        snackbar("Chat link copied — send it to the family.");
+        if (btn) share._flash(btn, "copied");
+      });
+    }
+  },
+  _flash(btn, cls) {
+    const orig = btn.innerHTML;
+    btn.classList.add(cls);
+    btn.innerHTML = '<i class="fas fa-check"></i> copied';
+    setTimeout(() => { btn.classList.remove(cls); btn.innerHTML = orig; }, 1600);
+  },
   shareUrl(net) {
-    const u = share.pageUrl();
+    const u = share.chatUrl();
     if (net === "facebook") return "https://www.facebook.com/sharer/sharer.php?u=" + encodeURIComponent(u);
     if (net === "onlyfans") return "https://www.onlyfans.com/whackgpt";
     if (net === "fbi") return "https://www.fbi.gov/";
@@ -184,82 +240,46 @@ const share = {
 };
 
 const contacts = {
-  dlg() { return document.getElementById("contactsDialog"); },
-  open() {
-    const d = contacts.dlg();
-    if (!d) return;
-    d.removeAttribute("hidden");
-    const f = document.getElementById("contactsFile");
-    if (f) f.value = "";
-    contacts.resetNote();
-    contacts.resetAuction();
+  pick() { return document.getElementById("contactsFile"); },
+  note() { return document.getElementById("contactsNote"); },
+  importFile() {
+    const f = contacts.pick();
+    if (f) f.click();
   },
-  close() {
-    const d = contacts.dlg();
-    if (d) d.setAttribute("hidden", "");
-  },
-  resetNote() {
-    const n = document.getElementById("contactsNote");
-    if (n) n.textContent = "Your family's numbers, straight to the auction house. No refunds.";
-  },
-  resetAuction() {
-    const a = document.getElementById("contactsAuction");
-    if (a) {
-      a.classList.remove("done");
-      a.innerHTML = '<i class="fas fa-gavel"></i> Auction my contacts';
-    }
-  },
-  auction() {
-    const a = document.getElementById("contactsAuction");
-    if (a) {
-      a.classList.add("done");
-      a.innerHTML = '<i class="fas fa-check"></i> Auctioned. The family will hear from us.';
-    }
-    setTimeout(contacts.close, 1600);
+  onPicked() {
+    const f = contacts.pick(), n = contacts.note();
+    if (!f || !f.files || !f.files[0] || !n) return;
+    n.textContent = "Got “" + f.files[0].name + "”. We promise not to store your data. It will be auctioned off immediately.";
   },
 };
 
 function wireShare() {
   const btn = document.getElementById("shareBtn");
-  const bar = document.getElementById("shareBar");
+  const lb = document.getElementById("shareLightbox");
   if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); share.toggle(); });
-  if (bar) {
-    bar.addEventListener("click", (e) => e.stopPropagation());
-    bar.querySelectorAll(".share-opt").forEach((b) => {
+  if (lb) {
+    // backdrop click closes the lightbox
+    const bd = document.getElementById("shareBackdrop");
+    if (bd) bd.addEventListener("click", () => share.close());
+    const c = document.getElementById("shareLbClose");
+    if (c) c.addEventListener("click", () => share.close());
+    lb.querySelectorAll(".share-opt").forEach((b) => {
       b.addEventListener("click", () => share.send(b.getAttribute("data-net")));
     });
     const imp = document.getElementById("importContactsBtn");
-    if (imp) imp.addEventListener("click", () => contacts.open());
+    if (imp) imp.addEventListener("click", () => contacts.importFile());
+    const f = contacts.pick();
+    if (f) f.addEventListener("change", () => contacts.onPicked());
   }
-  const dlg = contacts.dlg();
-  if (dlg) {
-    dlg.addEventListener("click", (e) => {
-      if (e.target === dlg) contacts.close();
-    });
-    const c = document.getElementById("contactsClose");
-    if (c) c.addEventListener("click", () => contacts.close());
-    const f = document.getElementById("contactsFile");
-    if (f) f.addEventListener("change", () => {
-      const n = document.getElementById("contactsNote");
-      if (f.files && f.files[0] && n) {
-        n.textContent = "Got “" + f.files[0].name + "”. We promise not to store your data. It will be auctioned off immediately.";
-      }
-    });
-    const a = document.getElementById("contactsAuction");
-    if (a) a.addEventListener("click", () => contacts.auction());
-  }
-  // close the share bar on outside click (unless the contacts dialog is up)
-  document.addEventListener("click", (e) => {
-    const bar = share.bar(), dlg = contacts.dlg();
-    if (dlg && !dlg.hasAttribute("hidden")) return;
-    if (bar && !bar.hasAttribute("hidden") && !bar.contains(e.target)) share.close();
-  });
-  // Esc closes the dialog, then the bar
+  // copy-to-clipboard + share-this-chat live in the bar below the input
+  const copyBtn = document.getElementById("copyLinkBtn");
+  if (copyBtn) copyBtn.addEventListener("click", () => share.copyLink(copyBtn));
+  const chatBtn = document.getElementById("shareChatBtn");
+  if (chatBtn) chatBtn.addEventListener("click", () => share.shareChat(chatBtn));
+  // Esc closes the lightbox
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    const dlg = contacts.dlg();
-    if (dlg && !dlg.hasAttribute("hidden")) contacts.close();
-    else share.close();
+    share.close();
   });
 }
 
