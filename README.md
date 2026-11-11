@@ -1,8 +1,8 @@
 ![Whackgpt_750](https://github.com/user-attachments/assets/327a7f61-7ae0-4dad-ba16-a31df9055bbe)
 
-An experimental project by **DA`/50**.
+[whack.webm](https://github.com/user-attachments/assets/d2c0591b-b7d8-402e-9762-ce981e72f822)
 
-### See what other chatbots are saying about WhackGPT!
+### See what inferior chatbots are saying about WhackGPT!
 
 **ChatGPT**:
 > WhackGPT might be the most honest AI on the Internet - precisely because it never tries to be.
