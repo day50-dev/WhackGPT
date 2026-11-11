@@ -1,6 +1,7 @@
 ![Whackgpt_750](https://github.com/user-attachments/assets/327a7f61-7ae0-4dad-ba16-a31df9055bbe)
 
-[whack.webm](https://github.com/user-attachments/assets/d2c0591b-b7d8-402e-9762-ce981e72f822)
+[whack.webm](https://github.com/user-attachments/assets/c91a7d31-a65a-4bf9-95fc-04301bd18225)
+
 
 ### See what inferior chatbots are saying about WhackGPT!
 
