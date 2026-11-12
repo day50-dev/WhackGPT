@@ -46,6 +46,25 @@ a:hover {
 .svg-drawing {
   width: 100%;
 }
+
+/* "cooking" placeholder while the server generates/edits an image */
+.img-pending-msg {
+  margin: 0.75rem 0;
+}
+.img-pending {
+  display: block;
+  width: 72px;
+  padding: 0.25rem;
+  border-radius: 0.75rem;
+  background-color: var(--slightly-lighter);
+  box-shadow: 0 0 16px 2px rgba(0, 0, 0, 0.35);
+  opacity: 0.9;
+  animation: img-cook 1.6s ease-in-out infinite;
+}
+@keyframes img-cook {
+  0%, 100% { opacity: 0.55; transform: scale(0.97); }
+  50% { opacity: 1; transform: scale(1.03); }
+}
 .svg-img {
   width: 100%;
   height: auto;

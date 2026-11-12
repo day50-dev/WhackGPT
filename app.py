@@ -28,7 +28,7 @@ rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
 _topicTs = "convos_ts"
-_model = ";caps=text,tools;blit"
+_model = ";caps=text,tools;glm*blit"
 
 # Fire-and-forget work (e.g. titling a new chat) must not delay the response
 # stream. Keep a strong ref so the task isn't garbage collected mid-flight.
@@ -688,7 +688,7 @@ def edit_image(prompt, image, model=None):
 # fallback chain). NOTE: the app's main chat model (glm*blit) is text-only and
 # no vision host in the pool serves glm, so this dedicated analyze_image call
 # targets the vision families that are available (qwen / gemma / llava).
-_VISION_MODELS = ";caps=vision;glm*blit"
+_VISION_MODELS = ";caps=vision;blit"
 
 
 def _mime(blob):
@@ -1065,12 +1065,16 @@ async def handle_tool_call(uid, tc):
                     return
         except Exception:
             pass
+        # tell the client to show the "cooking" placeholder while this runs
+        # (it can take up to a minute; without this the chat just sits there).
+        rds.publish(f"sess:{uid}", json.dumps({"type": "image_pending"}))
         try:
             # generate_image is blocking and can take a minute; off the loop
             # it goes, or the whole server stops serving while it waits.
             image_name = await asyncio.to_thread(generate_image, prompt)
         except Exception as e:
             print(f"Error processing generate_image tool: {e}")
+            rds.publish(f"sess:{uid}", json.dumps({"type": "image_done"}))
             return
         # add_to_session both stores and publishes, so this persists the image
         # and renders it into the open chat. The shape is what the frontend
@@ -1109,11 +1113,13 @@ async def handle_tool_call(uid, tc):
                     return
         except Exception:
             pass
+        rds.publish(f"sess:{uid}", json.dumps({"type": "image_pending"}))
         try:
             # editing races free community hosts and can take a minute; off the loop.
             image_name = await asyncio.to_thread(edit_image, prompt, image, args.get("model"))
         except Exception as e:
             print(f"Error processing edit_image tool: {e}")
+            rds.publish(f"sess:{uid}", json.dumps({"type": "image_done"}))
             # tell the model it failed so it can say so / retry, rather than
             # silently returning nothing.
             add_to_session(uid, {
@@ -1269,28 +1275,32 @@ async def handle_tool_call(uid, tc):
         except Exception:
             limit = 5
         key = f"sess:{uid}"
-        raw = rds.lrange(key, 0, limit - 1)
+        # The list also holds the system prompt (stored as the first row) and
+        # tool rows, which are NOT part of the conversation. Read a wider
+        # window than `limit` and filter them out: dumping the system prompt
+        # here made the model read its own persona as a message and it lost
+        # the plot (it started hallucinating where that text came from).
+        raw = rds.lrange(key, 0, max(limit * 4, 24) - 1)
         lines = []
         for item in raw:
             msg = json.loads(html.unescape(item.decode()))
-            role = msg.get("role", "?")
+            role = msg.get("role")
             content = msg.get("content")
-            if isinstance(content, dict):
-                tname = content.get("name")
-                if tname == "play_game":
-                    content = "(game move)"
-                elif tname == "generate_image":
-                    content = "(image)"
-                else:
-                    content = str(content.get("content") or "")
+            # Only real conversation text: user / assistant messages with a
+            # plain string body. This is what the model needs to quote back
+            # for edit_history - and it skips the system prompt and tool rows.
+            if role not in ("user", "assistant") or not isinstance(content, str):
+                continue
             lines.append(f"[{role}] {content}")
+            if len(lines) >= limit:
+                break
         add_to_session(uid, {
             "role": "assistant",
             "content": {
                 "tool_call_id": tc["id"],
                 "role": "tool",
                 "name": "get_history",
-                "content": "\n".join(lines) or "(empty conversation)",
+                "content": "\n".join(lines) or "(no messages yet)",
             },
         })
 
@@ -2101,7 +2111,7 @@ async def chat(data: dict):
                         ttlResponse = apology.strip() or "SORRY I WAS GOING CRAZY"
                         _msg = {"role": "assistant", "content": ttlResponse}
                         if allReasoning:
-                            _msg["reasoning"] = allReasoning
+                            _msg["reasoning"] = allReasoning.strip()
                         add_to_session(uid, _msg)
                         run_in_background(rate_and_attach, uid, ttlResponse)
                         run_in_background(solicit_references, uid, ttlResponse)
@@ -2173,7 +2183,7 @@ async def chat(data: dict):
                     if not recovered and ttlResponse:
                         _msg = {"role": "assistant", "content": ttlResponse}
                         if allReasoning:
-                            _msg["reasoning"] = allReasoning
+                            _msg["reasoning"] = allReasoning.strip()
                         add_to_session(uid, _msg)
                         # rate the reply in the background (System One noul
                         # metrics) - the bars appear under the message when
@@ -2231,7 +2241,7 @@ async def chat(data: dict):
                     if final_text:
                         _msg = {"role": "assistant", "content": final_text}
                         if allReasoning:
-                            _msg["reasoning"] = allReasoning
+                            _msg["reasoning"] = allReasoning.strip()
                         add_to_session(uid, _msg)
                         run_in_background(rate_and_attach, uid, final_text)
                         run_in_background(solicit_references, uid, final_text)
