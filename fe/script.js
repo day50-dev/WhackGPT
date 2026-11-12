@@ -1252,11 +1252,12 @@ function callReply(text) {
 }
 
 var RINGTONES = [
-  'ringtones/ringtone1.ogg', 'ringtones/ringtone2.mp3', 'ringtones/ringtone3.mp3',
+  'ringtones/ringtone1.mp3', 'ringtones/ringtone2.mp3', 'ringtones/ringtone3.mp3',
   'ringtones/ringtone4.mp3', 'ringtones/ringtone5.mp3', 'ringtones/ringtone6.mp3',
   'ringtones/ringtone7.mp3', 'ringtones/ringtone8.mp3', 'ringtones/ringtone9.mp3',
   'ringtones/ringtone10.mp3', 'ringtones/ringtone11.mp3', 'ringtones/ringtone12.mp3',
-  'ringtones/ringtone13.ogg', 'ringtones/ringtone14.mp3', 'ringtones/ringtone15.mp3',
+  'ringtones/ringtone13.mp3', 'ringtones/ringtone14.mp3', 'ringtones/ringtone15.mp3',
+  'ringtones/ringtone16.mp3'
 ];
 
 function callRing(out) {

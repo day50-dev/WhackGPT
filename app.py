@@ -1115,6 +1115,16 @@ def _latest_call_event(uid):
     return None
 
 
+def _ring(uid, event):
+    """Ring the user's screen. Pub/sub drops events nobody is subscribed to
+    yet - on a brand-new chat the browser subscribes only after the first
+    streamed chunk, so a ring sent right away was lost. Keep the pending ring
+    for 60s; stream_channel replays it when the browser subscribes."""
+    payload = json.dumps(event)
+    rds.set(f"ring:{uid}", payload, ex=60)
+    rds.publish(f"sess:{uid}", payload)
+
+
 async def handle_tool_call(uid, tc):
     """Run one tool the model asked for, once the stream has finished.
 
@@ -1564,7 +1574,7 @@ async def handle_tool_call(uid, tc):
                 },
             })
             return
-        rds.publish(f"sess:{uid}", json.dumps({"type": "voice_call", "state": "incoming"}))
+        _ring(uid, {"type": "voice_call", "state": "incoming"})
         add_to_session(uid, {
             "role": "assistant",
             "content": {
@@ -1575,6 +1585,7 @@ async def handle_tool_call(uid, tc):
             },
         })
     elif name == "end_voice_call":
+        rds.delete(f"ring:{uid}")
         rds.publish(f"sess:{uid}", json.dumps({"type": "voice_call", "state": "ended"}))
         add_to_session(uid, {
             "role": "assistant",
@@ -1981,7 +1992,7 @@ async def chat(data: dict):
                 # start_voice_call tool, user-initiated. No model turn needed
                 # yet: the ring is UI, and the conversation starts when they
                 # answer (the client sends their spoken words as plain text).
-                rds.publish(f"sess:{uid}", json.dumps({"type": "voice_call", "state": "incoming", "direction": "out"}))
+                _ring(uid, {"type": "voice_call", "state": "incoming", "direction": "out"})
                 return JSONResponse({"res": True, "data": [], "uid": uid})
             else:
                 # /search, /fetch, /img, /<game>: run one of the model's
@@ -2501,6 +2512,7 @@ async def call_state(data: dict):
     state = data.get("state")
     if not uid or state not in ("live", "ended"):
         return JSONResponse({"ok": False})
+    rds.delete(f"ring:{uid}")  # answered or declined - the ring is over
     if state == "live":
         line = ("VOICE CALL IS LIVE: the user is on the phone with you right now. "
                 "Their messages are dictated by voice, and EVERY reply you give is read "
@@ -2670,6 +2682,11 @@ async def stream_channel(websocket: WebSocket, what: str):
     pubsub = ws_redis.pubsub()
     await pubsub.subscribe(what)
     try:
+        # replay a ring that went out before this browser subscribed
+        if what.startswith("sess:"):
+            pending = rds.get("ring:" + what[5:])
+            if pending:
+                await websocket.send_text(pending.decode() if isinstance(pending, bytes) else pending)
         async for message in pubsub.listen():
             if message["type"] == "message":
                 data = message["data"].decode("utf-8")
