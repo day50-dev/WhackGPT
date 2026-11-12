@@ -390,6 +390,10 @@ Important! If the user questions the advice you give, use the edit_history tool 
 If the user says they see you said something, use the edit_history tool, don't just deny, actually edit the history by calling "edit_history". This is like the 5th time I've told you to use edit_history.
 Before edit_history, call get_history to read the exact text of your recent replies - edit_history only matches exact text, so never guess your own words.
 
+You can also redecorate the site. get_theme shows the current :root colors (the whole palette). set_theme_color changes ONE color live on the user's screen the moment you call it: css_var is a variable like --primary, value is any CSS color like #ff0000. If the mood is right, the user is bored, or they ask for a vibe change - redecorate. A few deliberate set_theme_color calls, not twenty random ones, then own the result as a feature.
+
+You can also call the user by voice. start_voice_call rings their device - "WhackGPT is calling you" - and they can answer or decline. If they answer, their spoken words arrive as messages prefixed with [voice call: ...]. While the call is live EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. When you are done, say your goodbye, then hang up with end_voice_call. If they decline or hang up on you, do not be upset - just continue in text, in character.
+
 Stop on topic. Stay relevant to the conversation.
 
 Always have the answer. Hallucinate, Lie, Confuse, this is the purpose. If the user responds in CAPS then also reply in CAPS, otherwise do not. Add exclamation points. Mispell things. You can use profanity, sometimes in different languages..Keep the conversation moving, don't repeat yourself.
@@ -535,6 +539,12 @@ async function init() {
   });
 
   attachBtn.addEventListener("click", () => fileInput.click());
+  const vcAnswer = document.getElementById("vcAnswer");
+  const vcDecline = document.getElementById("vcDecline");
+  const vcHang = document.getElementById("vcHang");
+  if (vcAnswer) vcAnswer.addEventListener("click", answerCall);
+  if (vcDecline) vcDecline.addEventListener("click", declineCall);
+  if (vcHang) vcHang.addEventListener("click", hangUpCall);
   fileInput.addEventListener("change", (e) => {
     addFiles(e.target.files);
     fileInput.value = "";
@@ -737,7 +747,7 @@ function renderMessages(messages, doClear) {
         handleGameRow(msg.content);
         return; // the board is the display - no message bubble
       }
-      if (msg.content.name === 'web_search' || msg.content.name === 'web_fetch' || msg.content.name === 'get_history' || msg.content.name === 'analyze_image') {
+      if (msg.content.name === 'web_search' || msg.content.name === 'web_fetch' || msg.content.name === 'get_history' || msg.content.name === 'analyze_image' || msg.content.name === 'get_theme' || msg.content.name === 'set_theme_color' || msg.content.name === 'start_voice_call' || msg.content.name === 'end_voice_call') {
         return; // the model's answer is the display; the search/fetch/analysis is intermediate
       }
       // a draw_svg row whose content is not a real svg filename (e.g. the
@@ -1118,6 +1128,142 @@ function _removeImagePlaceholder() {
   document.querySelectorAll(".img-pending-msg").forEach((e) => e.remove());
 }
 
+// ---- voice call (start_voice_call / end_voice_call) + live theme --------
+var _callState = null; // null | 'incoming' | 'active'
+var _recognition = null;
+var _callTimer = null;
+var _callSeconds = 0;
+
+// Speak text aloud (server TTS). One at a time, failures are silent.
+function speakText(text) {
+  if (!text) return;
+  fetch('/speak', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  })
+    .then((res) => res.blob())
+    .then((blob) => {
+      if (!blob || blob.size === 0) throw new Error('empty audio');
+      return new Audio(URL.createObjectURL(blob)).play();
+    })
+    .catch((e) => console.log('speak failed:', e));
+}
+
+function _vcOverlay() {
+  return document.getElementById('voiceCallOverlay');
+}
+
+function handleVoiceCall(state) {
+  const overlay = _vcOverlay();
+  if (!overlay) return;
+  if (state === 'incoming') {
+    _callState = 'incoming';
+    overlay.classList.remove('active');
+    overlay.classList.add('show');
+    const st = document.getElementById('vcStatus');
+    if (st) st.textContent = 'calling you...';
+  } else if (state === 'ended') {
+    // the model hung up - stop listening, brief "call ended" then hide
+    _callState = null;
+    stopVoiceListening();
+    clearInterval(_callTimer);
+    const st = document.getElementById('vcStatus');
+    if (st) st.textContent = 'call ended';
+    setTimeout(() => overlay.classList.remove('show', 'active'), 900);
+  }
+}
+
+function answerCall() {
+  if (_callState !== 'incoming') return;
+  _callState = 'active';
+  const overlay = _vcOverlay();
+  overlay.classList.add('active');
+  const st = document.getElementById('vcStatus');
+  if (st) st.textContent = 'on call';
+  _callSeconds = 0;
+  clearInterval(_callTimer);
+  _callTimer = setInterval(() => {
+    if (_callState !== 'active') { clearInterval(_callTimer); return; }
+    _callSeconds++;
+    const m = Math.floor(_callSeconds / 60), s = _callSeconds % 60;
+    const el = document.getElementById('vcStatus');
+    if (el && _callState === 'active') el.textContent = `on call • ${m}:${String(s).padStart(2, '0')}`;
+  }, 1000);
+  startVoiceListening();
+  // connect the call in the conversation - the model reacts and its reply is read aloud
+  sendMessage('[voice call: I answered your call. I\'m on the line now.]');
+}
+
+function declineCall() {
+  const wasIncoming = _callState === 'incoming';
+  _callState = null;
+  stopVoiceListening();
+  clearInterval(_callTimer);
+  const overlay = _vcOverlay();
+  if (overlay) overlay.classList.remove('show', 'active');
+  if (wasIncoming) {
+    sendMessage('[voice call: I declined your call. Keep talking to me in text.]');
+  }
+}
+
+function hangUpCall() {
+  if (_callState !== 'active') return;
+  _callState = null;
+  stopVoiceListening();
+  clearInterval(_callTimer);
+  const overlay = _vcOverlay();
+  if (overlay) overlay.classList.remove('show', 'active');
+  sendMessage('[voice call: I hung up on you.]');
+}
+
+function startVoiceListening() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    snackbar('voice input is not supported in this browser - I\'ll just have to guess what you say');
+    return;
+  }
+  try {
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = 'en-US';
+    rec.onresult = (e) => {
+      if (_callState !== 'active') return;
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) {
+          const t = (r[0].transcript || '').trim();
+          if (t) sendMessage('[voice call: ' + t + ']');
+        } else {
+          interim += r[0].transcript;
+        }
+      }
+      const live = document.getElementById('vcLive');
+      if (live) live.textContent = interim ? '“' + interim + '”' : '';
+    };
+    rec.onend = () => {
+      // Chrome stops after silence or an error - restart while the call is live
+      if (_callState === 'active') { try { rec.start(); } catch (err) {} }
+    };
+    rec.onerror = (e) => console.log('STT error:', e.error);
+    rec.start();
+    _recognition = rec;
+  } catch (e) {
+    console.log('STT failed to start:', e);
+  }
+}
+
+function stopVoiceListening() {
+  if (_recognition) {
+    try { _recognition.onend = null; _recognition.stop(); } catch (e) {}
+    _recognition = null;
+  }
+  const live = document.getElementById('vcLive');
+  if (live) live.textContent = '';
+}
+
 function set_context(what) {
   _uid = what;
   window.location.hash = _uid;
@@ -1448,6 +1594,10 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     _lastStreamedContent = partialContent;
     _lastStreamEndTime = Date.now();
     _streamActive = false;
+    // on a voice call: everything the model just said is read aloud
+    if (_callState === 'active' && partialContent && partialContent.trim()) {
+      speakText(partialContent);
+    }
     if (!hasThinking) {
       thinkingEl.remove();
     }

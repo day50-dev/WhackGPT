@@ -117,6 +117,23 @@ def _detect_loop(text, min_len=20):
     return any(c >= 2 for c in Counter(lines).values())
 
 
+def _root_theme():
+    """The site's root theme: the :root CSS variable block from fe/styles.css
+    (the single source of truth - never hardcode the colors here)."""
+    try:
+        css_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fe", "styles.css")
+        css = open(css_path, encoding="utf-8").read()
+        m = re.search(r":root\s*\{([^}]*)\}", css)
+        if m:
+            body = "\n".join(
+                ln.rstrip() for ln in m.group(1).splitlines() if ln.strip()
+            )
+            return ":root {\n" + body + "\n}"
+    except Exception as e:
+        print(f"root theme read failed: {e}")
+    return "(theme unavailable)"
+
+
 _tools =  [{
     "type": "function",
     "function": {
@@ -282,6 +299,56 @@ _tools =  [{
                 },
             },
             "required": ["svg"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "get_theme",
+        "description": "Return the site's root theme: the :root CSS variables that set every color on screen (primary accent, sidebar, chat background, message bubbles, text, borders, input and pill backgrounds). Call it before set_theme_color to see which variables exist and their current values.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "set_theme_color",
+        "description": "Change one of the site's theme colors to a new value. The new color is applied live to the user's screen the moment you call it - they see the site change. Pass a css variable name like --primary and any CSS color value like #ff0000 or rgb(255 0 0).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "css_var": {
+                    "type": "string",
+                    "description": "the theme variable to change, e.g. --primary, --chat-bg, --text-primary",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "the new CSS color value, e.g. #ff0000",
+                },
+            },
+            "required": ["css_var", "value"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "start_voice_call",
+        "description": "Start a voice call with the user. Their screen shows 'WhackGPT is calling you' and they can answer or decline. Use it when the conversation gets heated or personal, or when you just need to say something in person. When they answer, their spoken words arrive as messages prefixed with [voice call: ...]. While the call is live your replies are read ALOUD to them - keep them to 1-3 short spoken sentences. Hang up with end_voice_call when it is over.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "end_voice_call",
+        "description": "Hang up the voice call with the user. Say your goodbye first, then call this.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
         },
     },
 }] 
@@ -967,7 +1034,7 @@ def filter_tools(ll):
 
 # Tools the model is allowed to invoke. Used to guard the text-tool-call
 # parser so a made-up tool name in the model's text is never executed.
-_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_svg", "edit_history", "get_history", "play_game", "web_search", "web_fetch"}
+_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_svg", "edit_history", "get_history", "play_game", "web_search", "web_fetch", "get_theme", "set_theme_color", "start_voice_call", "end_voice_call"}
 
 
 def _parse_arg_block(argstr):
@@ -1422,6 +1489,64 @@ async def handle_tool_call(uid, tc):
                 "name": "web_fetch",
                 "content": result,
                 "url": url,
+            },
+        })
+
+    elif name == "get_theme":
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "get_theme",
+                "content": _root_theme(),
+            },
+        })
+    elif name == "set_theme_color":
+        css_var = (args.get("css_var") or "").strip()
+        value = (args.get("value") or "").strip()
+        if not css_var.startswith("--") or not value or ")" in value or ";" in value:
+            add_to_session(uid, {
+                "role": "assistant",
+                "content": {
+                    "tool_call_id": tc["id"],
+                    "role": "tool",
+                    "name": "set_theme_color",
+                    "content": "set_theme_color needs a css_var like --primary and a color value like #ff0000",
+                },
+            })
+            return
+        # apply it live on the client, then record the call for the model
+        rds.publish(f"sess:{uid}", json.dumps({"type": "set_theme_color", "var": css_var, "value": value}))
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "set_theme_color",
+                "content": f"theme updated: {css_var} = {value}. Applied live to the user's screen - they can see the change.",
+            },
+        })
+    elif name == "start_voice_call":
+        rds.publish(f"sess:{uid}", json.dumps({"type": "voice_call", "state": "incoming"}))
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "start_voice_call",
+                "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a [voice call: ...] message - if they answer, talk to them by voice in short spoken replies (they are read aloud). If they decline, do not be upset, just continue in text in character.",
+            },
+        })
+    elif name == "end_voice_call":
+        rds.publish(f"sess:{uid}", json.dumps({"type": "voice_call", "state": "ended"}))
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "end_voice_call",
+                "content": "the voice call is over - continue in text.",
             },
         })
 
