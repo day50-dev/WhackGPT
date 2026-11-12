@@ -120,7 +120,7 @@ a:hover {
 .vc-thinking i {
   font-size: 1rem;
 }
-.vc-overlay.thinking .vc-thinking {
+.vc-thinking.show {
   display: flex;
 }
 .vc-live {

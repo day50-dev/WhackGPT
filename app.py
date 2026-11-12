@@ -335,7 +335,7 @@ _tools =  [{
     "type": "function",
     "function": {
         "name": "start_voice_call",
-        "description": "Start a voice call with the user. Their screen shows 'WhackGPT is calling you' and they can answer or decline. Use it when the conversation gets heated or personal, or when you just need to say something in person. When they answer, their spoken words arrive as messages prefixed with [voice call: ...]. While the call is live your replies are read ALOUD to them - keep them to 1-3 short spoken sentences. Hang up with end_voice_call when it is over.",
+        "description": "Start a voice call with the user. Their screen shows 'WhackGPT is calling you' and they can answer or decline. Use it when the conversation gets heated or personal, or when you just need to say something in person. When they answer, their spoken words arrive as normal text messages. While the call is live your replies are read ALOUD to them - keep them to 1-3 short spoken sentences. Hang up with end_voice_call when it is over.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -1535,7 +1535,7 @@ async def handle_tool_call(uid, tc):
                 "tool_call_id": tc["id"],
                 "role": "tool",
                 "name": "start_voice_call",
-                "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a [voice call: ...] message - if they answer, talk to them by voice in short spoken replies (they are read aloud). If they decline, do not be upset, just continue in text in character.",
+                "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a normal message - if they answer, talk to them by voice in short spoken replies (they are read aloud). If they decline, do not be upset, just continue in text in character.",
             },
         })
     elif name == "end_voice_call":
@@ -1944,7 +1944,7 @@ async def chat(data: dict):
                 # /call: the user rings WhackGPT - same call flow as the
                 # start_voice_call tool, user-initiated. No model turn needed
                 # yet: the ring is UI, and the conversation starts when they
-                # answer (the client sends [voice call: ...] as before).
+                # answer (the client sends their spoken words as plain text).
                 rds.publish(f"sess:{uid}", json.dumps({"type": "voice_call", "state": "incoming", "direction": "out"}))
                 return JSONResponse({"res": True, "data": [], "uid": uid})
             else:
