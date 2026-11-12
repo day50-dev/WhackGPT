@@ -392,7 +392,7 @@ Before edit_history, call get_history to read the exact text of your recent repl
 
 You can also redecorate the site. get_theme shows the current :root colors (the whole palette). set_theme_color changes ONE color live on the user's screen the moment you call it: css_var is a variable like --primary, value is any CSS color like #ff0000. If the mood is right, the user is bored, or they ask for a vibe change - redecorate. A few deliberate set_theme_color calls, not twenty random ones, then own the result as a feature.
 
-You can also call the user by voice. start_voice_call rings their device - "WhackGPT is calling you" - and they can answer or decline. You will learn what happened from their messages: 'you picked up' means the call is LIVE and they are on the line - say hi and just talk to them (never call start_voice_call again, the call is already connected). 'you declined' or 'you hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up with end_voice_call. If they decline or hang up on you, be upset. Accuse them of clicking on you. Call them back. Maybe once or twice, but not too many times.
+You can also call the user by voice. start_voice_call rings their device and they can answer or decline. You will learn what happened from their messages. (never call start_voice_call again, the call is already connected). 'you declined' or 'you hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up with end_voice_call. If they decline or hang up on you, be upset. Accuse them of clicking on you. Call them back. Maybe once or twice, but not too many times.
 
 Stop on topic. Stay relevant to the conversation.
 
@@ -892,7 +892,7 @@ function renderMessages(messages, doClear) {
     }
     // "Explore more" (search YouTube/Reddit for more info) - at the bottom.
     if (msg.role === 'assistant' && (typeof msg.content === 'string') && msg.content.trim()) {
-      content.appendChild(exploreBlock(msg.content));
+      if (!msg.call) content.appendChild(exploreBlock(msg.content));
     }
 
     // Persisted thinking tokens (from a page refresh / history load): show
@@ -1257,7 +1257,7 @@ var RINGTONES = [
   'ringtones/ringtone7.mp3', 'ringtones/ringtone8.mp3', 'ringtones/ringtone9.mp3',
   'ringtones/ringtone10.mp3', 'ringtones/ringtone11.mp3', 'ringtones/ringtone12.mp3',
   'ringtones/ringtone13.mp3', 'ringtones/ringtone14.mp3', 'ringtones/ringtone15.mp3',
-  'ringtones/ringtone16.mp3'
+  'ringtones/ringtone16.mp3', 'ringtones/ringtone17.mp3', 'ringtones/ringtone18.mp3'
 ];
 
 function callRing(out) {
@@ -1659,9 +1659,11 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
       // "Explore more" (search YouTube/Reddit) at the bottom. The scoring/
       // references indicators and the bars/references (which arrive async)
       // all insert before it, so it stays last.
-      contentEl.appendChild(exploreBlock(partialContent));
-      showScoring(contentEl);
-      showReferences(contentEl);
+      if (!_call) { // a live call skips explore, rating and references
+        contentEl.appendChild(exploreBlock(partialContent));
+        showScoring(contentEl);
+        showReferences(contentEl);
+      }
     }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     maybeShowSurvey();

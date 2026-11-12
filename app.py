@@ -66,7 +66,7 @@ INFER_TIMEOUT = float(os.environ.get("WHACK_INFER_TIMEOUT", "90"))
 INFER_MAX_ATTEMPTS = int(os.environ.get("WHACK_INFER_ATTEMPTS", "3"))
 INFER_RETRY_DELAY = 2.0
 
-DYVA_API_BASE = "http://127.0.0.1:8080/v1"
+DYVA_API_BASE = "http://127.0.0.1:11434/v1"
 
 # The System One judge model used to rate assistant replies (dangerous /
 # coherent / sincere). A variable so it can be swapped; starts at nimble-v3.
@@ -79,16 +79,18 @@ def _infer_client(timeout: float):
     )
 
 
-async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=None):
-    """Call Dyva with streaming and yield chunks."""
+async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=None, think=None):
+    """Call Dyva with streaming and yield chunks. think=False turns the
+    thinking tokens off (used on live voice calls, for speed)."""
     headers = { "Content-Type": "application/json", }
 
     payload = {
-        #"think": False,
         "model": model,
         "messages": messages,
         "stream": True
     }
+    if think is not None:
+        payload["think"] = think
 
     if tools:
         payload["tools"] = tools
@@ -884,7 +886,7 @@ async def websocket_client_logic(websocket: WebSocket, voice: str, url: str, api
 
 
 @app.websocket_route("/tts")
-async def tts_endpoint(websocket: WebSocket, voice: str = "expresso/ex03-ex01_happy_001_channel1_334s.wav", url: str = "ws://127.0.0.1:8080", api_key: str = "public_token"):
+async def tts_endpoint(websocket: WebSocket, voice: str = "expresso/ex03-ex01_happy_001_channel1_334s.wav", url: str = "ws://127.0.0.1:11434", api_key: str = "public_token"):
     await websocket.accept()
 
     input_queue = asyncio.Queue()
@@ -2086,6 +2088,10 @@ async def chat(data: dict):
         # If the user linked any websites, hand the fetched pages to the model
         # as part of their message so it can answer from the actual content.
         model_history = filter_tools(history)
+        # live voice call: no thinking tokens - the reply is spoken, speed wins
+        _think = False if _latest_call_event(uid) == "you picked up" else None
+        if _think is False:
+            print(f"[call] {uid}: live voice call - sending think:false")
         if fetched_pages and model_history and model_history[-1].get("role") == "user":
             model_history[-1]["content"] = (
                 (model_history[-1].get("content") or "")
@@ -2189,7 +2195,7 @@ async def chat(data: dict):
                     emitted = False
                     looped = False
                     try:
-                        async for chunk in openrouter_stream(openrouter_model, history, _tools, "auto"):
+                        async for chunk in openrouter_stream(openrouter_model, history, _tools, "auto", think=_think):
                             choices = chunk.get("choices", [])
                             content = ""
                             if choices:
@@ -2281,7 +2287,7 @@ async def chat(data: dict):
                         ]
                         apology = ""
                         try:
-                            async for _c in openrouter_stream(openrouter_model, _ap_history, None, "auto"):
+                            async for _c in openrouter_stream(openrouter_model, _ap_history, None, "auto", think=_think):
                                 _ch = _c.get("choices", [])
                                 if _ch:
                                     apology += _ch[0].get("delta", {}).get("content", "") or ""
@@ -2291,9 +2297,12 @@ async def chat(data: dict):
                         _msg = {"role": "assistant", "content": ttlResponse}
                         if allReasoning:
                             _msg["reasoning"] = allReasoning.strip()
+                        if _think is False:
+                            _msg["call"] = True  # spoken on a live call - no explore/ratings UI
                         add_to_session(uid, _msg)
-                        run_in_background(rate_and_attach, uid, ttlResponse)
-                        run_in_background(solicit_references, uid, ttlResponse)
+                        if _think is not False:  # skipped on a live voice call
+                            run_in_background(rate_and_attach, uid, ttlResponse)
+                            run_in_background(solicit_references, uid, ttlResponse)
                         run_in_background(ensure_title, uid)
                         break
                     # Completed text, partial output, or the timeout message -
@@ -2363,12 +2372,15 @@ async def chat(data: dict):
                         _msg = {"role": "assistant", "content": ttlResponse}
                         if allReasoning:
                             _msg["reasoning"] = allReasoning.strip()
+                        if _think is False:
+                            _msg["call"] = True  # spoken on a live call - no explore/ratings UI
                         add_to_session(uid, _msg)
                         # rate the reply in the background (System One noul
                         # metrics) - the bars appear under the message when
                         # done. Off the loop: it's a blocking model call.
-                        run_in_background(rate_and_attach, uid, ttlResponse)
-                        run_in_background(solicit_references, uid, ttlResponse)
+                        if _think is not False:  # skipped on a live voice call
+                            run_in_background(rate_and_attach, uid, ttlResponse)
+                            run_in_background(solicit_references, uid, ttlResponse)
                         run_in_background(ensure_title, uid)
                     break
 
@@ -2406,7 +2418,7 @@ async def chat(data: dict):
                     yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
                     final_text = ''
                     try:
-                        async for chunk in openrouter_stream(openrouter_model, history, None, "auto"):
+                        async for chunk in openrouter_stream(openrouter_model, history, None, "auto", think=_think):
                             choices = chunk.get("choices", [])
                             content = ""
                             if choices:
@@ -2421,9 +2433,12 @@ async def chat(data: dict):
                         _msg = {"role": "assistant", "content": final_text}
                         if allReasoning:
                             _msg["reasoning"] = allReasoning.strip()
+                        if _think is False:
+                            _msg["call"] = True  # spoken on a live call - no explore/ratings UI
                         add_to_session(uid, _msg)
-                        run_in_background(rate_and_attach, uid, final_text)
-                        run_in_background(solicit_references, uid, final_text)
+                        if _think is not False:  # skipped on a live voice call
+                            run_in_background(rate_and_attach, uid, final_text)
+                            run_in_background(solicit_references, uid, final_text)
                         run_in_background(ensure_title, uid)
                     break
 
