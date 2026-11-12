@@ -119,7 +119,6 @@ const COMMANDS = [
   { cmd: "/poker", desc: "poker against the AI" },
   { cmd: "/blackjack", desc: "blackjack against the AI" },
   { cmd: "/edit", desc: "edit the last reply — <find> => <replace>" },
-  { cmd: "/call", desc: "ring WhackGPT — voice call" },
   { cmd: "/update", desc: "Rename this chat" },
   { cmd: "/delete", desc: "Delete this chat" },
 ];
@@ -393,7 +392,7 @@ Before edit_history, call get_history to read the exact text of your recent repl
 
 You can also redecorate the site. get_theme shows the current :root colors (the whole palette). set_theme_color changes ONE color live on the user's screen the moment you call it: css_var is a variable like --primary, value is any CSS color like #ff0000. If the mood is right, the user is bored, or they ask for a vibe change - redecorate. A few deliberate set_theme_color calls, not twenty random ones, then own the result as a feature.
 
-You can also call the user by voice. start_voice_call rings their device - "WhackGPT is calling you" - and they can answer or decline. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up with end_voice_call. If they decline or hang up on you, be upset. Accuse them of clicking on you. Call them back. Maybe once or twice, but not too many times.
+You can also call the user by voice. start_voice_call rings their device - "WhackGPT is calling you" - and they can answer or decline. You will learn what happened from their messages: 'you picked up' means the call is LIVE and they are on the line - say hi and just talk to them (never call start_voice_call again, the call is already connected). 'you declined' or 'you hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up with end_voice_call. If they decline or hang up on you, be upset. Accuse them of clicking on you. Call them back. Maybe once or twice, but not too many times.
 
 Stop on topic. Stay relevant to the conversation.
 
@@ -540,14 +539,10 @@ async function init() {
   });
 
   attachBtn.addEventListener("click", () => fileInput.click());
-  const vcAnswer = document.getElementById("vcAnswer");
-  const vcDecline = document.getElementById("vcDecline");
-  const vcHang = document.getElementById("vcHang");
-  if (vcAnswer) vcAnswer.addEventListener("click", answerCall);
-  if (vcDecline) vcDecline.addEventListener("click", declineCall);
-  if (vcHang) vcHang.addEventListener("click", hangUpCall);
-  const vcMute = document.getElementById("vcMute");
-  if (vcMute) vcMute.addEventListener("click", () => setMuted(!_muted));
+  document.getElementById("vcAnswer").addEventListener("click", callAnswer);
+  document.getElementById("vcDecline").addEventListener("click", () => callEnd("you declined"));
+  document.getElementById("vcHang").addEventListener("click", () => callEnd("you hung up"));
+  document.getElementById("vcMute").addEventListener("click", callToggleMute);
   fileInput.addEventListener("change", (e) => {
     addFiles(e.target.files);
     fileInput.value = "";
@@ -738,6 +733,13 @@ function renderMessages(messages, doClear) {
 
   messages.forEach((msg) => {
     if (msg.role == "system") {
+      return;
+    }
+    if (msg.role === "user" && isCallEvent(msg.content)) {
+      const line = document.createElement("div");
+      line.className = "call-event";
+      line.textContent = msg.content;
+      messagesContainer.appendChild(line);
       return;
     }
     const messageEl = document.createElement("div");
@@ -1131,364 +1133,171 @@ function _removeImagePlaceholder() {
   document.querySelectorAll(".img-pending-msg").forEach((e) => e.remove());
 }
 
-// ---- voice call (start_voice_call / end_voice_call) + live theme --------
-var _callState = null; // null | 'incoming' | 'active'
-var _recognition = null;
-var _callTimer = null;
-var _callWatchdog = null;
-var _callSeconds = 0;
+// ---- voice call -----------------------------------------------------------
+// ONE source of truth: _call. null = no call. Otherwise _call.phase is one of
+//   ringing   overlay up, ringtone playing
+//   listening your turn, mic open
+//   muted     your turn, mic closed
+//   thinking  your words were sent, waiting on the reply
+//   speaking  the reply is being read aloud
+// Every transition goes through callSet(), which opens/closes the mic and
+// redraws the screen from _call. No timers, no intervals - only events.
+var _call = null; // { phase, out, rec, ring, audio, heard }
 
-// Speak text aloud (server TTS). Serialized so there is only ever ONE voice.
-// While a call is live the mic is muted for the whole playback so
-// SpeechRecognition doesn't transcribe WhackGPT's own voice (feedback loop),
-// the spoken text is shown on the call overlay, and dictation picks the user
-// back up as soon as the audio ends.
-var _speakQueue = [];
-var _speakBusy = false;
-// The mic stays OPEN for the whole call (no stop/start around TTS - that cycle
-// is what killed round two). While WhackGPT talks, _ttsPlaying gates its own
-// voice out of the transcript; a short grace period after each reply catches
-// stragglers.
-var _ttsPlaying = false;
-var _ttsEndedAt = 0;
-
-// split a reply into TTS-safe chunks (<=70 words, sentence boundaries) so the
-// WHOLE reply gets spoken - the TTS host rushes/cuts anything longer
-function _ttsChunks(text) {
-  const MAX = 70;
-  const clean = String(text || '').trim();
-  if (!clean) return [];
-  const out = [];
-  let cur = '';
-  let count = 0;
-  const flush = () => { if (cur) { out.push(cur); cur = ''; count = 0; } };
-  for (const raw of clean.split(/(?<=[.!?…])\s+/)) {
-    const s = raw.trim();
-    if (!s) continue;
-    const words = s.split(/\s+/);
-    if (words.length > MAX) {
-      // one giant sentence - hard split
-      flush();
-      for (let i = 0; i < words.length; i += MAX) out.push(words.slice(i, i + MAX).join(' '));
-      continue;
-    }
-    if (count + words.length > MAX) flush();
-    cur = cur ? cur + ' ' + s : s;
-    count += words.length;
-  }
-  flush();
-  return out;
+function isCallEvent(t) {
+  return t === 'you picked up' || t === 'you declined' || t === 'you hung up';
 }
 
-// Speak text aloud (server TTS), chunk by chunk so long replies aren't cut
-// off. Serialized so there is only ever ONE voice. While a call is live the
-// mic stays muted for the WHOLE reply (no feedback loop) and dictation picks
-// the user back up when the last chunk ends.
-function speakText(text) {
-  if (!text) return;
-  if (_speakBusy) {
-    _speakQueue.push(text);
-    return;
-  }
-  _speakBusy = true;
-  const onCall = _callState === 'active';
-  if (onCall) _ttsPlaying = true;
-  const chunks = _ttsChunks(text);
-  let i = 0;
-  const finish = () => {
-    if (onCall) { _ttsPlaying = false; _ttsEndedAt = Date.now(); }
-    if (onCall && _callState === 'active') {
-      if (_speakQueue.length) {
-        speakText(_speakQueue.shift());
-        return;
-      }
-      if (!_muted) startVoiceListening();
-      setCallState('listening');
-    } else {
-      _speakQueue.length = 0;
-      setCallState(null);
-    }
-    _speakBusy = false;
-  };
-  const next = () => {
-    if (i >= chunks.length) { finish(); return; };
-    const c = chunks[i++];
-    fetch('/speak', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: c }),
-    })
-      .then((res) => res.blob())
-      .then((blob) => {
-        if (!blob || blob.size === 0) throw new Error('empty audio');
-        const audio = new Audio(URL.createObjectURL(blob));
-        if (onCall && _callState === 'active') setCallState('speaking');
-        return new Promise((resolve) => {
-          audio.onended = resolve;
-          audio.onerror = resolve;
-          audio.play().catch(() => resolve());
-        });
-      })
-      .then(() => {
-        if (onCall && _callState === 'active' && i < chunks.length) setCallState('thinking');
-        next();
-      })
-      .catch((e) => {
-        console.log('speak failed:', e);
-        next();
-      });
-  };
-  next();
+function callSet(phase) {
+  if (!_call) return;
+  _call.phase = phase;
+  if (phase !== 'ringing' && _call.ring) { _call.ring.pause(); _call.ring = null; }
+  if (phase !== 'speaking' && _call.audio) { _call.audio.pause(); _call.audio = null; }
+  if (phase === 'listening') callListen(); else callStopListening();
+  callRender();
 }
 
-function _vcOverlay() {
-  return document.getElementById('voiceCallOverlay');
-}
-
-// user's manual mute (independent of the TTS auto-mute)
-var _muted = false;
-function setMuted(on) {
-  _muted = on;
-  const btn = document.getElementById('vcMute');
-  if (btn) {
-    btn.innerHTML = on ? '<i class="fas fa-microphone-slash"></i>' : '<i class="fas fa-microphone"></i>';
-    btn.classList.toggle('muted', on);
-    btn.title = on ? 'Unmute' : 'Mute';
-  }
-  if (on) {
-    stopVoiceListening();
-  } else if (_callState === 'active') {
-    startVoiceListening();
-  }
-}
-
-// ringtones - all local copies (never rely on a remote URL staying up).
-// Add new ones here: download into fe/ringtones/ and list the path.
-const RINGTONES = [
-  'ringtones/ringtone1.ogg',
-  'ringtones/ringtone2.mp3',
-  'ringtones/ringtone3.mp3',
-  'ringtones/ringtone4.mp3',
-  'ringtones/ringtone5.mp3',
-  'ringtones/ringtone6.mp3',
-  'ringtones/ringtone7.mp3',
-  'ringtones/ringtone8.mp3',
-  'ringtones/ringtone9.mp3',
-];
-var _ringtone = null;
-function startRingtone() {
-  stopRingtone();
-  try {
-    const src = RINGTONES[Math.floor(Math.random() * RINGTONES.length)];
-    _ringtone = new Audio(src);
-    _ringtone.loop = true;
-    _ringtone.volume = 1;
-    _ringtone.play().catch((e) => console.log('ringtone failed:', e));
-  } catch (e) {
-    console.log('ringtone failed:', e);
-  }
-}
-function stopRingtone() {
-  if (_ringtone) {
-    try { _ringtone.pause(); } catch (e) {}
-    _ringtone = null;
-  }
-}
-
-// the call card's turn indicator - whose turn it is right now:
-// 'listening' (your turn - mic open), 'thinking' (model working),
-// 'speaking' (WhackGPT's voice is playing). null hides it.
-function setCallState(state) {
-  const el = document.getElementById('vcThinking');
-  if (!el) return;
-  if (!state || _callState !== 'active') {
-    el.classList.remove('show');
-    return;
-  }
-  el.classList.add('show');
-  if (state === 'thinking') {
-    el.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i><span>whackgpt is thinking…</span>';
-  } else if (state === 'speaking') {
-    el.innerHTML = '<i class="fas fa-volume-up"></i><span>whackgpt is speaking…</span>';
-  } else {
-    el.innerHTML = '<i class="fas fa-microphone"></i><span>listening to you…</span>';
-  }
-}
-
-function handleVoiceCall(state, direction) {
-  const overlay = _vcOverlay();
+function callRender() {
+  const overlay = document.getElementById('voiceCallOverlay');
   if (!overlay) return;
-  if (state === 'incoming') {
-    _callState = 'incoming';
-    overlay.classList.remove('active');
-    overlay.classList.add('show');
-    startRingtone();
-    const st = document.getElementById('vcStatus');
-    // direction 'out' = the user rang WhackGPT (/call)
-    if (st) st.textContent = direction === 'out' ? 'calling WhackGPT...' : 'calling you...';
-  } else if (state === 'ended') {
-    // the model hung up - stop listening, brief "call ended" then hide
-    _callState = null;
-    _muted = false;
-    _ttsPlaying = false;
-    stopRingtone();
-    stopVoiceListening();
-    clearInterval(_callTimer);
-    clearInterval(_callWatchdog);
-    setCallState(null);
-    const st = document.getElementById('vcStatus');
-    if (st) st.textContent = 'call ended';
-    setTimeout(() => overlay.classList.remove('show', 'active'), 900);
-  }
+  if (!_call) { overlay.classList.remove('show', 'active'); return; }
+  const p = _call.phase;
+  overlay.classList.add('show');
+  overlay.classList.toggle('active', p !== 'ringing');
+  document.getElementById('vcStatus').textContent = {
+    ringing: _call.out ? 'calling WhackGPT…' : 'calling you…',
+    listening: 'listening…',
+    muted: 'muted',
+    thinking: 'whackgpt is thinking…',
+    speaking: 'whackgpt is speaking…',
+  }[p];
+  document.getElementById('vcLive').textContent = _call.heard ? '“' + _call.heard + '”' : '';
+  const mute = document.getElementById('vcMute');
+  mute.disabled = !(p === 'listening' || p === 'muted');
+  mute.classList.toggle('muted', p === 'muted');
+  mute.innerHTML = p === 'muted' ? '<i class="fas fa-microphone-slash"></i>' : '<i class="fas fa-microphone"></i>';
 }
 
-function answerCall() {
-  if (_callState !== 'incoming') return;
-  _callState = 'active';
-  setMuted(false);
-  _callTranscriptClear();
-  stopRingtone();
-  const overlay = _vcOverlay();
-  overlay.classList.add('active');
-  const st = document.getElementById('vcStatus');
-  if (st) st.textContent = 'on call';
-  _callSeconds = 0;
-  clearInterval(_callTimer);
-  _callTimer = setInterval(() => {
-    if (_callState !== 'active') { clearInterval(_callTimer); return; }
-    _callSeconds++;
-    const m = Math.floor(_callSeconds / 60), s = _callSeconds % 60;
-    const el = document.getElementById('vcStatus');
-    if (el && _callState === 'active') el.textContent = `on call • ${m}:${String(s).padStart(2, '0')}`;
-  }, 1000);
-  // connect the call in the conversation - the model reacts and its reply is
-  // read aloud. It's YOUR turn first: the mic is open, so show listening,
-  // not "thinking".
-  sendMessage('I just picked up your call. I am on the line.');
-  setCallState('listening');
-  // watchdog: whatever kills the mic mid-call, it gets picked back up
-  clearInterval(_callWatchdog);
-  _callWatchdog = setInterval(() => {
-    if (_callState !== 'active') { clearInterval(_callWatchdog); return; }
-    if (!_muted && !_recognition) startVoiceListening();
-  }, 2000);
-}
-
-function declineCall() {
-  const wasIncoming = _callState === 'incoming';
-  _callState = null;
-  _ttsPlaying = false;
-  stopRingtone();
-  stopVoiceListening();
-  clearInterval(_callTimer);
-  clearInterval(_callWatchdog);
-  const overlay = _vcOverlay();
-  if (overlay) overlay.classList.remove('show', 'active');
-  if (wasIncoming) {
-    sendMessage('I just declined your call. Keep talking to me in text.');
-  }
-}
-
-function hangUpCall() {
-  if (_callState !== 'active') return;
-  _callState = null;
-  _ttsPlaying = false;
-  stopRingtone();
-  stopVoiceListening();
-  clearInterval(_callTimer);
-  clearInterval(_callWatchdog);
-  const overlay = _vcOverlay();
-  if (overlay) overlay.classList.remove('show', 'active');
-  sendMessage('I just hung up on you.');
-}
-
-function startVoiceListening() {
+// one recognizer per listening stretch. It ends on its own after your
+// utterance (continuous=false) or after silence; onend decides what's next.
+var CALL_MIC_FATAL = ['not-allowed', 'service-not-allowed', 'audio-capture', 'network', 'language-not-supported'];
+function callListen() {
+  if (_call.rec) return;
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
-    snackbar('voice input is not supported in this browser - I\'ll just have to guess what you say');
-    return;
-  }
-  // give the mic a beat to be released by any previous instance, and re-check
-  // the state at start time (the user may have hung up in the meantime)
-  setTimeout(() => {
-    if (_callState !== 'active' || _muted || _recognition) return;
-    try {
-      const rec = new SR();
-      rec.continuous = true;
-      rec.interimResults = true;
-      rec.lang = 'en-US';
-      rec.onresult = (e) => {
-        // discard WhackGPT's own voice while it talks (mic stays open)
-        if (_callState !== 'active' || _muted) return;
-        if (_ttsPlaying || Date.now() - _ttsEndedAt < 500) return;
-        let interim = '';
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          const r = e.results[i];
-          if (r.isFinal) {
-            const t = (r[0].transcript || '').trim();
-            if (t) {
-              _callTranscriptAdd('you', t);
-              sendMessage(t);
-              setCallState('thinking');
-            }
-          } else {
-            interim += r[0].transcript;
-          }
-        }
-        const live = document.getElementById('vcLive');
-        if (live) live.textContent = interim ? '“' + interim + '”' : '';
-      };
-      rec.onend = () => {
-        // Chrome stops after silence or an error - restart while the call is live
-        if (_recognition === rec) _recognition = null;
-        if (_callState === 'active' && !_muted) startVoiceListening();
-      };
-      rec.onerror = (e) => {
-        console.log('STT error:', e.error);
-        if (e.error === 'not-allowed') snackbar('mic access was blocked - allow it to keep the call going');
-      };
-      rec.start();
-      _recognition = rec;
-    } catch (e) {
-      // the mic may still be locked by a previous instance - retry
-      console.log('STT failed to start, retrying:', e);
-      setTimeout(startVoiceListening, 600);
+  if (!SR) { snackbar('voice input is not supported in this browser'); return; }
+  const rec = new SR();
+  rec.lang = 'en-US';
+  rec.continuous = false;
+  rec.interimResults = true;
+  let final = '';
+  let error = null;
+  rec.onresult = (e) => {
+    let f = '', interim = '';
+    for (const r of e.results) {
+      if (r.isFinal) f += r[0].transcript; else interim += r[0].transcript;
     }
-  }, 350);
+    final = f.trim();
+    if (_call && _call.rec === rec) { _call.heard = (f + interim).trim(); callRender(); }
+  };
+  rec.onerror = (e) => { error = e.error; };
+  rec.onend = () => {
+    if (!_call || _call.rec !== rec) return; // we stopped it on purpose
+    _call.rec = null;
+    if (final) { callSend(final); return; }
+    if (CALL_MIC_FATAL.includes(error)) {
+      snackbar('mic unavailable (' + error + ')');
+      callSet('muted');
+      return;
+    }
+    callListen(); // silence - keep listening
+  };
+  _call.rec = rec;
+  rec.start();
 }
 
-function stopVoiceListening() {
-  if (_recognition) {
-    // null out onresult too - in-flight transcripts must not leak through
-    // while the TTS voice is playing (feedback loop)
-    try { _recognition.onend = null; _recognition.onresult = null; _recognition.stop(); } catch (e) {}
-    _recognition = null;
-  }
-  const live = document.getElementById('vcLive');
-  if (live) live.textContent = '';
+function callStopListening() {
+  if (!_call || !_call.rec) return;
+  const rec = _call.rec;
+  _call.rec = null; // clear first so its onend is ignored
+  rec.abort();
 }
 
-// live "call transcript" on the call card - one line per spoken utterance
-function _callTranscriptAdd(who, text) {
-  const box = document.getElementById('vcTranscript');
-  if (!box || !text) return;
-  const line = document.createElement('div');
-  line.className = 'vc-line';
-  const w = document.createElement('span');
-  w.className = 'vc-line-who';
-  w.textContent = who;
-  const t = document.createElement('span');
-  t.className = 'vc-line-text';
-  t.textContent = text;
-  line.appendChild(w);
-  line.appendChild(t);
-  box.appendChild(line);
-  box.scrollTop = box.scrollHeight;
+function callSend(text) {
+  _call.heard = text;
+  callSet('thinking');
+  sendMessage(text).catch(() => callReply(''));
 }
 
-function _callTranscriptClear() {
-  const box = document.getElementById('vcTranscript');
-  if (box) box.innerHTML = '';
+// sendMessage hands every finished reply here
+function callReply(text) {
+  if (!_call || _call.phase !== 'thinking') return;
+  if (!text || !text.trim()) { callSet('listening'); return; }
+  callSet('speaking');
+  fetch('/speak', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  })
+    .then((res) => res.blob())
+    .then((blob) => {
+      if (!_call || _call.phase !== 'speaking') return;
+      const audio = new Audio(URL.createObjectURL(blob));
+      const done = () => { if (_call && _call.audio === audio) callSet('listening'); };
+      audio.onended = done;
+      audio.onerror = done;
+      _call.audio = audio;
+      audio.play().catch(done);
+    })
+    .catch(() => { if (_call && _call.phase === 'speaking') callSet('listening'); });
+}
+
+var RINGTONES = [
+  'ringtones/ringtone1.ogg', 'ringtones/ringtone2.mp3', 'ringtones/ringtone3.mp3',
+  'ringtones/ringtone4.mp3', 'ringtones/ringtone5.mp3', 'ringtones/ringtone6.mp3',
+  'ringtones/ringtone7.mp3', 'ringtones/ringtone8.mp3', 'ringtones/ringtone9.mp3',
+  'ringtones/ringtone10.mp3', 'ringtones/ringtone11.mp3', 'ringtones/ringtone12.mp3',
+  'ringtones/ringtone13.ogg', 'ringtones/ringtone14.mp3', 'ringtones/ringtone15.mp3',
+];
+
+function callRing(out) {
+  if (_call) return; // already ringing or on a call
+  _call = { phase: 'ringing', out, rec: null, ring: null, audio: null, heard: '' };
+  const ring = new Audio(RINGTONES[Math.floor(Math.random() * RINGTONES.length)]);
+  ring.loop = true;
+  ring.play().catch((e) => console.log('ringtone failed:', e));
+  _call.ring = ring;
+  callSet('ringing');
+}
+
+function callAnswer() {
+  if (!_call || _call.phase !== 'ringing') return;
+  callSet('listening'); // you talk first
+  fetch('call_state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: _uid, state: 'live' }),
+  });
+}
+
+function callToggleMute() {
+  if (!_call) return;
+  if (_call.phase === 'listening') callSet('muted');
+  else if (_call.phase === 'muted') callSet('listening');
+}
+
+// event: 'you declined' / 'you hung up' (sent so the model reacts), or null
+// when the model hung up itself
+function callEnd(event) {
+  if (!_call) return;
+  callSet('ended'); // stops mic, ringtone and voice
+  _call = null;
+  callRender();
+  fetch('call_state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: _uid, state: 'ended' }),
+  });
+  if (event) sendMessage(event);
 }
 
 function set_context(what) {
@@ -1517,7 +1326,8 @@ function set_context(what) {
       return;
     }
     if (message.type === 'voice_call') {
-      handleVoiceCall(message.state, message.direction);
+      if (message.state === 'incoming') callRing(message.direction === 'out');
+      else callEnd(null);
       return;
     }
     if (message.type === 'edit_error') {
@@ -1649,7 +1459,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
   // The server echoes it back over the channel websocket; _pendingUserText
   // tells set_context() to drop that echo so it isn't rendered twice.
   if (!isRegen && !isEdit && (text || imagesToRender.length) && (text ? text[0] !== "/" : true)) {
-    if (text) _pendingUserText.push(text);
+    if (text) _pendingUserText.push(text); // so the server echo is dropped
     renderMessages([{ role: "user", content: text || "", images: imagesToRender }]);
   }
 
@@ -1832,13 +1642,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     _lastStreamedContent = partialContent;
     _lastStreamEndTime = Date.now();
     _streamActive = false;
-    // on a voice call: everything the model just said is read aloud
-    if (_callState === 'active' && partialContent && partialContent.trim()) {
-      _callTranscriptAdd('WhackGPT', partialContent);
-      speakText(partialContent);
-    } else if (_callState === 'active') {
-      setCallState('listening');
-    }
+    callReply(partialContent); // no-op unless a call is waiting on this reply
     if (!hasThinking) {
       thinkingEl.remove();
     }

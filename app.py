@@ -1092,6 +1092,29 @@ def _extract_text_tool_calls(text):
     return calls, cleaned
 
 
+_CALL_EVENTS = {"you picked up", "you declined", "you hung up"}
+
+
+def _latest_call_event(uid):
+    """Newest call-event user message in the session ('you picked up' / 'you
+    declined' / 'you hung up'), or None if there hasn't been one yet."""
+    try:
+        key = f"sess:{uid}"
+        for i in range(min(rds.llen(key), 40)):
+            raw = rds.lindex(key, i)
+            if not raw:
+                continue
+            try:
+                row = json.loads(html.unescape(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw))
+            except Exception:
+                continue
+            if isinstance(row, dict) and row.get("role") == "user" and row.get("content") in _CALL_EVENTS:
+                return row["content"]
+    except Exception:
+        pass
+    return None
+
+
 async def handle_tool_call(uid, tc):
     """Run one tool the model asked for, once the stream has finished.
 
@@ -1528,6 +1551,19 @@ async def handle_tool_call(uid, tc):
             },
         })
     elif name == "start_voice_call":
+        # dedupe: if the user already answered, the call is LIVE. Ringing
+        # again just resets their screen and starts a call-answer loop.
+        if _latest_call_event(uid) == "you picked up":
+            add_to_session(uid, {
+                "role": "assistant",
+                "content": {
+                    "tool_call_id": tc["id"],
+                    "role": "tool",
+                    "name": "start_voice_call",
+                    "content": "the call is ALREADY LIVE - the user is on the line right now. Do not call again. Just talk to them in short spoken sentences (they are read aloud).",
+                },
+            })
+            return
         rds.publish(f"sess:{uid}", json.dumps({"type": "voice_call", "state": "incoming"}))
         add_to_session(uid, {
             "role": "assistant",
@@ -1535,7 +1571,7 @@ async def handle_tool_call(uid, tc):
                 "tool_call_id": tc["id"],
                 "role": "tool",
                 "name": "start_voice_call",
-                "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a normal message - if they answer, talk to them by voice in short spoken replies (they are read aloud). If they decline, do not be upset, just continue in text in character.",
+                "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a normal message - 'you picked up' means the call is live (just talk), 'you declined' or 'you hung up' means it is over. If they answer, talk to them by voice in short spoken replies (they are read aloud). If they decline, do not be upset, just continue in text in character.",
             },
         })
     elif name == "end_voice_call":
@@ -2453,6 +2489,30 @@ async def speak(data: dict):
     except Exception as e:
         print(f"Error in speak: {e}")
         return Response(content=b"", media_type="audio/mpeg")
+
+@app.post("/call_state")
+async def call_state(data: dict):
+    """Lightweight voice-call signal from the client - NO model round-trip.
+    Injects a system context line into the session so the model knows the
+    call is live (keep replies short + spoken) or over, without making a
+    model call on answer (that was the 2-minute 'thinking' block).
+    state: 'live' | 'ended'"""
+    uid = data.get("uid")
+    state = data.get("state")
+    if not uid or state not in ("live", "ended"):
+        return JSONResponse({"ok": False})
+    if state == "live":
+        line = ("VOICE CALL IS LIVE: the user is on the phone with you right now. "
+                "Their messages are dictated by voice, and EVERY reply you give is read "
+                "ALOUD to them. Keep every reply to 1-3 short natural spoken sentences, "
+                "like a real phone call. No markdown, no lists, no long text.")
+        # the call-log row: _latest_call_event() reads it to know the call is live
+        add_to_session(uid, {"role": "user", "content": "you picked up"})
+    else:
+        line = "The voice call has ended. Return to normal text replies."
+    add_to_session(uid, {"role": "system", "content": line})
+    return JSONResponse({"ok": True})
+
 
 def _extract_video_id(url):
     """Extract the YouTube video ID from a URL (watch?v=, youtu.be/, embed/,

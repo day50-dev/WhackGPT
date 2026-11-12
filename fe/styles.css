@@ -123,6 +123,21 @@ a:hover {
 .vc-thinking.show {
   display: flex;
 }
+
+/* call-state events ("you picked up", "you hung up") - a centered call-log
+   line, clearly NOT a typed chat bubble */
+.call-event {
+  display: table;
+  margin: 0.8rem auto;
+  padding: 0.3rem 1rem;
+  font-size: 0.82rem;
+  font-style: italic;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+}
 .vc-live {
   min-height: 1.2rem;
   margin-top: 0.5rem;
