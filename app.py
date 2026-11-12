@@ -28,7 +28,7 @@ rds = redis.Redis(host="localhost", port=6379, db=0)
 
 _topicList = "convos"
 _topicTs = "convos_ts"
-_model = "glm*blit"
+_model = ";caps=text,tools;blit"
 
 # Fire-and-forget work (e.g. titling a new chat) must not delay the response
 # stream. Keep a strong ref so the task isn't garbage collected mid-flight.
@@ -148,6 +148,26 @@ _tools =  [{
                 "image": {
                     "type": "string",
                     "description": "The image to edit: the /uploads/... path of the user's attachment (as given in their message) or an /images/... path of one you generated.",
+                },
+            },
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
+        "name": "analyze_image",
+        "description": "Look at an image and get a description of its contents. The user's uploaded images are NOT sent to you as vision by default - you cannot see them unless you call this tool. Use it to find out what is in an attached image (and where a person's face is) before you answer about it or edit it. Call it once per image.",
+        "parameters": {
+            "type": "object",
+            "required": ["image"],
+            "properties": {
+                "image": {
+                    "type": "string",
+                    "description": "The image to analyze: the /uploads/... path of the user's attachment or an /images/... path of one you generated.",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "Optional. A specific question to answer about the image. If omitted, a general description is returned.",
                 },
             },
         },
@@ -663,6 +683,55 @@ def edit_image(prompt, image, model=None):
     return image_name
 
 
+# Vision is requested the documented way: the ';caps=vision;' capability facet
+# on a model name that a vision host actually serves (a comma list is a
+# fallback chain). NOTE: the app's main chat model (glm*blit) is text-only and
+# no vision host in the pool serves glm, so this dedicated analyze_image call
+# targets the vision families that are available (qwen / gemma / llava).
+_VISION_MODELS = ";caps=vision;glm*blit"
+
+
+def _mime(blob):
+    if blob[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if blob[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+        return "image/webp"
+    if blob[:5] == b"GIF87" or blob[:5] == b"GIF89":
+        return "image/gif"
+    return "image/png"
+
+
+def analyze_image(image, question=None):
+    """View an image with a vision model and return its description (or the
+    answer to `question`). This is the ONLY way the chat model learns what is
+    in an image - uploads are not auto-sent as vision, so it must call this."""
+    blob = base64.b64decode(_load_image_b64(image))
+    data_url = "data:%s;base64,%s" % (_mime(blob), base64.b64encode(blob).decode())
+    if question:
+        text = question
+    else:
+        text = ("Describe this image in detail: the subject(s), setting, colors, "
+                "and any text. If a person's face is visible, say where in the frame "
+                "it is and what it looks like.")
+    url = f"http://{_sd_ip}/v1/chat/completions"
+    payload = {
+        "model": _VISION_MODELS,
+        "stream": False,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ]}],
+    }
+    response = requests.post(url, json=payload, timeout=_sd_timeout)
+    data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception:
+        raise ValueError(f"no description in vision response: {str(data)[:200]}")
+
+
 def _clean_svg(svg):
     """Clean up a model-drawn SVG: strip whitespace, fix a trailing extra '>'
     (models sometimes emit '</svg>>'), and ensure it's a complete document
@@ -845,6 +914,16 @@ def filter_tools(ll):
                 # the model fumbled a move by typing it as text - neutralize
                 # the imitable line before it feeds back into the context
                 row["content"] = "(a move was fumbled as text; if a game is in progress and it is your turn, call the play_game tool)"
+            elif row.get("role") == "user" and isinstance(row.get("images"), list) and row["images"]:
+                # The attached image path must reach the model even if the
+                # upstream proxy strips the non-standard 'images' key. It is
+                # NOT sent as vision by default - tell the model it can't see
+                # it and how to inspect/transform it.
+                paths = ", ".join(str(p) for p in row["images"])
+                note = (f"\n\n[The user attached an image: {paths}. You cannot see it - "
+                        f"call analyze_image on that path to describe it, or edit_image to transform it.]")
+                if isinstance(row.get("content"), str):
+                    row["content"] = row["content"] + note
             elif isinstance(row.get('content'), dict) and row['content'].get('role') == 'tool':
                 # other tool results (web_search, web_fetch, generate_image):
                 # present as a proper 'tool' role message so the model reads
@@ -888,7 +967,7 @@ def filter_tools(ll):
 
 # Tools the model is allowed to invoke. Used to guard the text-tool-call
 # parser so a made-up tool name in the model's text is never executed.
-_KNOWN_TOOLS = {"generate_image", "edit_image", "draw_svg", "edit_history", "get_history", "play_game", "web_search", "web_fetch"}
+_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_svg", "edit_history", "get_history", "play_game", "web_search", "web_fetch"}
 
 
 def _parse_arg_block(argstr):
@@ -1054,6 +1133,27 @@ async def handle_tool_call(uid, tc):
                 "role": "tool",
                 "name": "edit_image",
                 "content": image_name,
+            },
+        })
+
+    elif name == "analyze_image":
+        image = (args.get("image") or "").strip()
+        question = (args.get("question") or "").strip()
+        if not image:
+            return
+        try:
+            # vision races free community hosts and can take a while; off the loop.
+            desc = await asyncio.to_thread(analyze_image, image, question or None)
+        except Exception as e:
+            print(f"Error processing analyze_image tool: {e}")
+            desc = f"I could not analyze that image: {e}"
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "analyze_image",
+                "content": desc,
             },
         })
 

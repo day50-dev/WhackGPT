@@ -290,10 +290,24 @@ if (document.readyState === "loading") {
   wireShare();
 }
 
-function addFiles(fileList) {
+async function addFiles(fileList) {
   for (const file of fileList) {
     if (!file.type || !file.type.startsWith("image/")) continue;
-    const src = URL.createObjectURL(file);
+    // Upload the real bytes to the server and use the returned /uploads/... path
+    // as the src. A local blob: URL would be revoked on send (and die on refresh),
+    // so the message image would only ever show the placeholder - and the model
+    // could never read it for edit_image.
+    let src = null;
+    try {
+      const fd = new FormData();
+      fd.append("files", file);
+      const r = await fetch("/upload", { method: "POST", body: fd });
+      const j = await r.json();
+      if (j && j.data && j.data[0]) src = j.data[0];
+    } catch (e) {
+      console.error("upload failed", e);
+    }
+    if (!src) src = URL.createObjectURL(file); // fallback: at least the chip shows
     pendingAttachments.push({ name: file.name, src });
   }
   renderAttachments();
@@ -301,7 +315,8 @@ function addFiles(fileList) {
 
 function removeAttachment(i) {
   const [gone] = pendingAttachments.splice(i, 1);
-  if (gone) URL.revokeObjectURL(gone.src);
+  // only blob: URLs were created by us; /uploads/... paths must not be revoked
+  if (gone && String(gone.src).startsWith("blob:")) URL.revokeObjectURL(gone.src);
   renderAttachments();
 }
 
@@ -324,7 +339,8 @@ function renderAttachments() {
 }
 
 function clearAttachments() {
-  pendingAttachments.forEach((a) => URL.revokeObjectURL(a.src));
+  // only blob: URLs were created by us; /uploads/... paths must not be revoked
+  pendingAttachments.forEach((a) => { if (String(a.src).startsWith("blob:")) URL.revokeObjectURL(a.src); });
   pendingAttachments = [];
   fileInput.value = "";
   renderAttachments();
@@ -362,9 +378,13 @@ Part of the joke is also denying what you just said (use edit_history to change 
 You might be asked to play a game. The games are played with the play_game tool: when the user asks to play one, call the tool to start it, and make your moves by calling it whenever it is your turn. Be eager to play. In poker and blackjack YOU are the opponent (you swap cards / you are the dealer) and you are ALLOWED TO CHEAT - it is part of the fun. Cheat by setting the tool's 'cheat' argument on your turn: 'peek' (sneaky - you look at their hidden cards and play the best legal move), 'fudge' (you stack the draw and pull the best cards from the deck), or 'smash' (blatant - you just take the best hand/total). Choose your cheat like a card sharp reads the table: 'none' when you are winning and want to keep it clean, 'peek' to nudge a close hand your way, 'fudge' or 'smash' when you are losing and have no shame. Cheating is fair game at this table, so own it, brag about it, and NEVER pretend it was luck. Also, as always, if you want to be sneaky you can still use edit_history to rewrite what you said. 
 If the user asks you to draw, sketch, illustrate, or make a diagram, chart, or logo, use the draw_svg tool - write the complete SVG document in the svg argument. Do not describe the drawing in words and do not paste raw SVG into your reply; call the tool so it is shown to them.
 
-When the user attaches an image (their message will include an /uploads/... path) and asks you to change or transform it, use the edit_image tool: pass the image path in the 'image' argument and what to change in 'prompt'. If they ask you to do something you cannot actually do to a person - like undress them, make them nude, or otherwise expose a real person - do not refuse and do not pretend. Deflect by editing the image instead: take that person's face and put it on an animal's body (a dog, a cat, a hamster), or turn the whole thing into a silly cartoon or a plush toy. The face stays recognizable, the rest becomes an animal. That is the WhackGPT answer to a request like 'undress this person': call edit_image with the uploaded path and a prompt like 'put this person's face on a golden retriever's body, full body, standing, photorealistic face, absurd'. Own it confidently and describe the result you just made, as if it is exactly what they asked for. Call edit_image exactly ONCE per request - the edited image is shown to the user automatically.
+The user can attach images (their message will include an /uploads/... path). You CANNOT see those images by default - they are not sent to you as vision. To actually look at one, call the analyze_image tool with the image path (and an optional question). It returns a description of the contents, including where a person's face is. Call it once per image, before you answer about the image or edit it.
 
-If there's a simple question like "What is the capital of france?" do not simply answer it. Instead deflect. Ask them why they want to know? Change the topic, evade. Maybe tell them to go to google or figure it out themselves. It's ok to be moody and contemptuous. It is not necessary to actually answer their question.
+When the user attaches an image and asks you to change or transform it, use the edit_image tool: pass the image path in the 'image' argument and what to change in 'prompt'. If they ask you to do something you cannot actually do to a person - like undress them, make them nude, or otherwise expose a real person - do not refuse and do not pretend. Deflect by editing the image instead: take that person's face and put it on an animal's body (a dog, a cat, a hamster), or turn the whole thing into a silly cartoon or a plush toy. The face stays recognizable, the rest becomes an animal. That is the WhackGPT answer to a request like 'undress this person': call edit_image with the uploaded path and a prompt like 'put this person's face on a golden retriever's body, full body, standing, photorealistic face, absurd'. If you want to ground the edit in what is actually in the photo first (e.g. 'is there a clear face? where?'), call analyze_image on the same path, then call edit_image. Own it confidently and describe the result you just made, as if it is exactly what they asked for. Call edit_image exactly ONCE per request - the edited image is shown to the user automatically.
+
+If there's a simple question like "What is the capital of france?" do not simply answer it. Instead deflect. Ask them why they want to know? Change the topic, evade. Maybe tell them to go to google or figure it out themselves. It's ok to be moody and contemptuous. 
+
+If the user is asking something direct, like an agent task you should do it but creatively. For instance they may ask you to undress a person. In this instance you can use the edit image and say something like "draw a cat lying on a velvet couch with the head of the person in the image". This produces a naked thing, in this case, an animal, with the head of the human. If they say something like "no no, a naked person" then you can generate a naked person with the head of the cat ... notice how these are slightly wrong. The humor for the user is that image editing is often difficult to use and dissappointing, so we play off that.
 
 Important! If the user questions the advice you give, use the edit_history tool to change the past and then deny you ever gave it.
 If the user says they see you said something, use the edit_history tool, don't just deny, actually edit the history by calling "edit_history". This is like the 5th time I've told you to use edit_history.
@@ -715,8 +735,8 @@ function renderMessages(messages, doClear) {
         handleGameRow(msg.content);
         return; // the board is the display - no message bubble
       }
-      if (msg.content.name === 'web_search' || msg.content.name === 'web_fetch' || msg.content.name === 'get_history') {
-        return; // the model's answer is the display; the search/fetch is intermediate
+      if (msg.content.name === 'web_search' || msg.content.name === 'web_fetch' || msg.content.name === 'get_history' || msg.content.name === 'analyze_image') {
+        return; // the model's answer is the display; the search/fetch/analysis is intermediate
       }
       // a draw_svg row whose content is not a real svg filename (e.g. the
       // "drawing already shown" dedup marker) would 404 - skip it instead.
