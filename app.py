@@ -1940,6 +1940,13 @@ async def chat(data: dict):
                     return JSONResponse({"res": True, "data": [], "uid": uid})
                 await handle_tool_call(uid, tc)
                 return JSONResponse({"res": True, "data": [], "uid": uid})
+            elif cmd == "call":
+                # /call: the user rings WhackGPT - same call flow as the
+                # start_voice_call tool, user-initiated. No model turn needed
+                # yet: the ring is UI, and the conversation starts when they
+                # answer (the client sends [voice call: ...] as before).
+                rds.publish(f"sess:{uid}", json.dumps({"type": "voice_call", "state": "incoming", "direction": "out"}))
+                return JSONResponse({"res": True, "data": [], "uid": uid})
             else:
                 # /search, /fetch, /img, /<game>: run one of the model's
                 # tools directly (the popup mirrors _slash_tool_call). The

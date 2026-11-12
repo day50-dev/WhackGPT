@@ -80,13 +80,14 @@ a:hover {
   height: 84px;
   margin: 0 auto 0.9rem;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, var(--primary), var(--primary-dark));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 2rem;
-  color: #fff;
+  overflow: hidden;
   animation: vc-ring 1.6s ease-in-out infinite;
+}
+.vc-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 @keyframes vc-ring {
   0%, 100% { box-shadow: 0 0 0 0 rgba(16, 163, 127, 0.5); }
@@ -107,12 +108,74 @@ a:hover {
   color: var(--text-secondary);
   font-size: 0.95rem;
 }
+.vc-thinking {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+  color: var(--primary);
+  font-size: 0.9rem;
+}
+.vc-thinking i {
+  font-size: 1rem;
+}
+.vc-overlay.thinking .vc-thinking {
+  display: flex;
+}
 .vc-live {
   min-height: 1.2rem;
   margin-top: 0.5rem;
   color: var(--text-secondary);
   font-size: 0.85rem;
   font-style: italic;
+}
+/* call transcript - only visible while a call is active */
+.vc-transcript-label {
+  display: none;
+  margin-top: 1.1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.vc-transcript {
+  display: none;
+}
+.vc-overlay.active .vc-transcript-label {
+  display: block;
+}
+.vc-overlay.active .vc-transcript {
+  display: block;
+  max-height: 38vh;
+  overflow-y: auto;
+  margin-top: 0.5rem;
+  padding: 0.2rem 0.15rem;
+  text-align: left;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.vc-line {
+  margin-bottom: 0.55rem;
+  word-wrap: break-word;
+}
+.vc-line-who {
+  font-weight: 700;
+  margin-right: 0.45rem;
+  font-size: 0.78rem;
+}
+.vc-line .vc-line-who:first-child {
+  color: var(--primary);
+}
+.vc-line-text {
+  color: var(--text-primary);
+}
+.vc-overlay.active .vc-card {
+  max-height: 82vh;
+  overflow-y: auto;
 }
 .vc-actions {
   display: flex;
@@ -147,6 +210,12 @@ a:hover {
 }
 .vc-answer {
   background: #22c55e;
+}
+.vc-mute {
+  background: #6366f1;
+}
+.vc-mute.muted {
+  background: #374151;
 }
 .vc-decline {
   background: #ef4444;
