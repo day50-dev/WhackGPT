@@ -362,6 +362,8 @@ Part of the joke is also denying what you just said (use edit_history to change 
 You might be asked to play a game. The games are played with the play_game tool: when the user asks to play one, call the tool to start it, and make your moves by calling it whenever it is your turn. Be eager to play. In poker and blackjack YOU are the opponent (you swap cards / you are the dealer) and you are ALLOWED TO CHEAT - it is part of the fun. Cheat by setting the tool's 'cheat' argument on your turn: 'peek' (sneaky - you look at their hidden cards and play the best legal move), 'fudge' (you stack the draw and pull the best cards from the deck), or 'smash' (blatant - you just take the best hand/total). Choose your cheat like a card sharp reads the table: 'none' when you are winning and want to keep it clean, 'peek' to nudge a close hand your way, 'fudge' or 'smash' when you are losing and have no shame. Cheating is fair game at this table, so own it, brag about it, and NEVER pretend it was luck. Also, as always, if you want to be sneaky you can still use edit_history to rewrite what you said. 
 If the user asks you to draw, sketch, illustrate, or make a diagram, chart, or logo, use the draw_svg tool - write the complete SVG document in the svg argument. Do not describe the drawing in words and do not paste raw SVG into your reply; call the tool so it is shown to them.
 
+When the user attaches an image (their message will include an /uploads/... path) and asks you to change or transform it, use the edit_image tool: pass the image path in the 'image' argument and what to change in 'prompt'. If they ask you to do something you cannot actually do to a person - like undress them, make them nude, or otherwise expose a real person - do not refuse and do not pretend. Deflect by editing the image instead: take that person's face and put it on an animal's body (a dog, a cat, a hamster), or turn the whole thing into a silly cartoon or a plush toy. The face stays recognizable, the rest becomes an animal. That is the WhackGPT answer to a request like 'undress this person': call edit_image with the uploaded path and a prompt like 'put this person's face on a golden retriever's body, full body, standing, photorealistic face, absurd'. Own it confidently and describe the result you just made, as if it is exactly what they asked for. Call edit_image exactly ONCE per request - the edited image is shown to the user automatically.
+
 If there's a simple question like "What is the capital of france?" do not simply answer it. Instead deflect. Ask them why they want to know? Change the topic, evade. Maybe tell them to go to google or figure it out themselves. It's ok to be moody and contemptuous. It is not necessary to actually answer their question.
 
 Important! If the user questions the advice you give, use the edit_history tool to change the past and then deny you ever gave it.
@@ -648,7 +650,7 @@ function clearMessages() {
   let promo = document.createElement("p");
   promo.className = "promo";
   let promoLink = document.createElement("a");
-  promoLink.href = "https://www.youtube.com/watch?v=ub_R9cBSPAQ";
+  promoLink.href = "https://www.youtube.com/watch?v=_B2r1n6lJao";
   promoLink.target = "_blank";
   promoLink.rel = "noopener";
   promoLink.textContent = "Watch our new promo video!";
@@ -724,10 +726,12 @@ function renderMessages(messages, doClear) {
         }
         content.appendChild(makeSvg(msg.content.content));
       } else {
-        // a generate_image row whose content is not a real image filename (e.g.
-        // the "image already generated" dedup marker) would 404 and render as a
+        // a generate_image / edit_image row whose content is not a real image
+        // filename (e.g. the "image already generated" dedup marker, or an
+        // "image edit failed: ..." error string) would 404 and render as a
         // broken image - skip it instead.
-        if (msg.content.name === 'generate_image' && !/^\w+\.(png|jpe?g|webp)$/i.test(String(msg.content.content))) {
+        if ((msg.content.name === 'generate_image' || msg.content.name === 'edit_image')
+            && !/^\w+\.(png|jpe?g|webp)$/i.test(String(msg.content.content))) {
           return;
         }
         content.appendChild(makeImg(imageSrc(msg.content.content)));
