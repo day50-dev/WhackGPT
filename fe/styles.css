@@ -239,9 +239,16 @@ a:hover {
 .img-pending-msg {
   margin: 0.75rem 0;
 }
+/* The "cooking" placeholder is norms.avif (1344x768), the same footprint as a
+   generated result, so it should occupy the same box the real image lands in.
+   width:100% resolves against .message-content (the 800px column), so on
+   desktop it fills the column instead of shrinking to a 72px thumbnail.
+   Under 768px the mobile rule further down (.message-assistant
+   .message-content img - higher specificity) already wins and makes it
+   full-bleed 100vw, which is why mobile looked right and desktop didn't. */
 .img-pending {
   display: block;
-  width: 72px;
+  width: 100%;
   padding: 0.25rem;
   border-radius: 0.75rem;
   background-color: var(--slightly-lighter);

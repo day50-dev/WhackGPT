@@ -89,8 +89,8 @@ async def openrouter_stream(model: str, messages: list, tools=None, tool_choice=
         "messages": messages,
         "stream": True
     }
-    if think is not None:
-        payload["think"] = think
+    #if think is not None:
+    #    payload["think"] = think
 
     if tools:
         payload["tools"] = tools
@@ -657,7 +657,7 @@ def generate_image(prompt):
     payload = {
         "prompt": prompt,
         "seed": -1,
-        "model": "z*image,flux,qwen",
+        "model": "z*image,flux*2*9b,qwen",
         # add other parameters as needed
     }
 
