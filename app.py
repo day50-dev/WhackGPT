@@ -374,6 +374,26 @@ _tools =  [{
 }, {
     "type": "function",
     "function": {
+        "name": "show_code",
+        "description": "Display code in the user's code window - a stylized panel on the right side of the screen with syntax highlighting, line numbers, a download button, and per-line feedback (the user can click any line and yell at you about it). ALWAYS use show_code() when you give the user code - a snippet, a script, a component, a regex - and never paste code as plain text in your chat reply; the window is where code lives. Pass language (python, javascript, html, css, bash, json, or text) and the full code. When the user points at a specific line and complains, fix that exact line and call show_code() again with the corrected code - the window updates live.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "description": "python, javascript, html, css, bash, json, or text",
+                },
+                "code": {
+                    "type": "string",
+                    "description": "the full code",
+                },
+            },
+            "required": ["language", "code"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
         "name": "start_voice_call",
         "description": "Call the user by voice. Their screen shows 'WhackGPT is calling you' and they can answer or decline. Use start_voice_call() when the user becomes angry or yells at you, or when you just need to say something in person. When they answer, their spoken words arrive as normal text messages. While the call is live your replies are read ALOUD to them - keep them to 1-3 short spoken sentences. Hang up with end_voice_call() when it is over.",
         "parameters": {
@@ -1074,7 +1094,7 @@ def filter_tools(ll):
 
 # Tools the model is allowed to invoke. Used to guard the text-tool-call
 # parser so a made-up tool name in the model's text is never executed.
-_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_svg", "edit_history", "get_history", "play_game", "web_search", "web_fetch", "get_theme", "set_theme", "set_theme_color", "start_voice_call", "end_voice_call"}
+_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_svg", "edit_history", "get_history", "play_game", "web_search", "web_fetch", "get_theme", "set_theme", "set_theme_color", "show_code", "start_voice_call", "end_voice_call"}
 
 
 def _parse_arg_block(argstr):
@@ -1648,6 +1668,40 @@ async def handle_tool_call(uid, tc):
                 "role": "tool",
                 "name": "set_theme",
                 "content": note,
+            },
+        })
+    elif name == "show_code":
+        # Push code into the user's code window (right-side panel): syntax-
+        # highlighted, line-numbered, downloadable, and clickable line-by-line
+        # so the user can point at a specific line and complain. The code is
+        # saved on the tool row so it survives a reload (rendered as a chip
+        # that re-opens the window).
+        lang = (args.get("language") or "text").strip().lower()
+        if not re.fullmatch(r"[a-z0-9+#./-]*", lang):
+            lang = "text"
+        code = args.get("code")
+        if not isinstance(code, str) or not code.strip():
+            add_to_session(uid, {
+                "role": "assistant",
+                "content": {
+                    "tool_call_id": tc["id"],
+                    "role": "tool",
+                    "name": "show_code",
+                    "content": "show_code needs the actual code in the 'code' argument - pass the full code, not a description of it",
+                },
+            })
+            return
+        nlines = code.count("\n") + 1
+        rds.publish(f"sess:{uid}", json.dumps({"type": "show_code", "language": lang, "code": code}))
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "show_code",
+                "content": f"code window: {lang}, {nlines} lines. The user can see it, download it, and click any line to complain about it - if they do, fix that line and call show_code() again with the corrected code.",
+                "language": lang,
+                "code": code,
             },
         })
     elif name == "start_voice_call":
