@@ -375,7 +375,7 @@ _tools =  [{
     "type": "function",
     "function": {
         "name": "show_code",
-        "description": "Display code in the user's code window - a stylized panel on the right side of the screen with syntax highlighting, line numbers, a download button, and per-line feedback (the user can click any line and yell at you about it). ALWAYS use show_code() when you give the user code - a snippet, a script, a component, a regex - and never paste code as plain text in your chat reply; the window is where code lives. Pass language (python, javascript, html, css, bash, json, or text) and the full code. When the user points at a specific line and complains, fix that exact line and call show_code() again with the corrected code - the window updates live.",
+        "description": "Display code in the user's code window - a stylized panel on the right side of the screen with syntax highlighting, line numbers, a download button, and per-line feedback (the user can click any line to discuss it with you). ALWAYS use show_code() when you give the user code - a snippet, a script, a component, a regex - and never paste code as plain text in your chat reply; the window is where code lives. Pass language (python, javascript, html, css, bash, json, or text) and the full code. When the user points at a specific line and complains, fix that exact line and call show_code() again with the corrected code - the window updates live.",
         "parameters": {
             "type": "object",
             "properties": {
