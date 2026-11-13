@@ -3,7 +3,7 @@
    with line numbers, copy + download, and per-line "yell at the model". */
 
 .code-panel {
-  display: flex;
+  display: none; /* hidden until openCodePanel adds .open */
   flex-direction: column;
   width: min(520px, 46vw);
   min-width: 340px;
@@ -15,6 +15,9 @@
   font-size: 13px;
   overflow: hidden;
   animation: cp-in 0.18s ease-out;
+}
+.code-panel.open {
+  display: flex;
 }
 @keyframes cp-in {
   from { transform: translateX(12px); opacity: 0.4; }

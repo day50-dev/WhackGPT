@@ -856,50 +856,26 @@ function renderMessages(messages, doClear) {
       messageEl.appendChild(footer);
     }
 
-    if (msg.role === 'assistant' && typeof msg.content === 'string') {
-      const speakBtn = document.createElement('button');
-      speakBtn.className = 'speak-btn';
-      speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
-      speakBtn.title = 'Read aloud';
-      speakBtn.addEventListener('click', async () => {
-        speakBtn.disabled = true;
-        speakBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-        const reset = () => {
-          speakBtn.disabled = false;
-          speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
-        };
-        try {
-          const res = await fetch('/speak', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: msg.content }),
-          });
-          const blob = await res.blob();
-          if (!blob || blob.size === 0) throw new Error('empty audio');
-          const audio = new Audio(URL.createObjectURL(blob));
-          audio.onended = reset;
-          audio.onerror = reset;
-          await audio.play();
-        } catch {
-          reset();
-        }
-      });
-      content.appendChild(speakBtn);  // its own row in the content (not a column)
+    // ---- bottom bar (speak / references / ratings / explore) ----
+    // Same shared wrapper + insert helpers as the live path, so a rendered
+    // message and a live reply get the identical bar.
+    if (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.trim()) {
+      bottomInsert(content, makeSpeakBtn(msg.content), ".references-block, .ratings-row, .explore-block");
     }
 
     // Persisted references (from a page refresh / history load): show the
     // citations between the text and the rating bar.
     if (msg.role === 'assistant' && msg.references) {
-      content.appendChild(referencesBlock(msg.references));
+      bottomInsert(content, referencesBlock(msg.references), ".ratings-row, .explore-block");
     }
     // Persisted ratings (from a page refresh / history load): the judge
     // already scored this reply, so show the bars under the text.
     if (msg.role === 'assistant' && msg.ratings) {
-      content.appendChild(ratingsBar(msg.ratings));
+      bottomInsert(content, ratingsBar(msg.ratings), ".explore-block");
     }
     // "Explore more" (search YouTube/Reddit for more info) - at the bottom.
     if (msg.role === 'assistant' && (typeof msg.content === 'string') && msg.content.trim()) {
-      if (!msg.call) content.appendChild(exploreBlock(msg.content));
+      if (!msg.call) bottomInsert(content, exploreBlock(msg.content), null);
     }
 
     // Persisted thinking tokens (from a page refresh / history load): show
@@ -910,6 +886,10 @@ function renderMessages(messages, doClear) {
 
     messagesContainer.appendChild(messageEl);
   });
+
+  // One rule for the whole chat: the most recent assistant bar is expanded,
+  // everything before it is collapsed to the "more" row.
+  settleBottomBars();
 
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
@@ -1529,6 +1509,10 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
     renderMessages([{ role: "user", content: text || "", images: imagesToRender }]);
   }
 
+  // A new turn is starting: every bottom bar collapses (the incoming reply
+  // lands as the only expanded one - see settleBottomBars above).
+  collapseAllBars();
+
   let thinkingContent = '';
   let thinkingTokenCount = 0;
   let hasThinking = false;
@@ -1750,10 +1734,14 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
       // references indicators and the bars/references (which arrive async)
       // all insert before it, so it stays last.
       if (!_call) { // a live call skips explore, rating and references
-        contentEl.appendChild(exploreBlock(partialContent));
+        bottomInsert(contentEl, exploreBlock(partialContent), null);
+        bottomInsert(contentEl, makeSpeakBtn(partialContent), ".references-block, .ratings-row, .explore-block");
         showScoring(contentEl);
         showReferences(contentEl);
       }
+      // This reply is now the most recent: its bar is expanded, every
+      // previous bar is collapsed (same rule as history load).
+      settleBottomBars();
     }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     maybeShowSurvey();
@@ -2128,16 +2116,19 @@ function loadPlayer(card, videoId) {
 // indicator, which are separate children).
 function getReplyText(contentEl) {
   const clone = contentEl.cloneNode(true);
-  clone.querySelectorAll(".ratings-row, .scoring-indicator, .references-indicator, .references-block").forEach(el => el.remove());
+  // The whole bottom bar (speak / references / ratings / explore / live
+  // indicators) is UI, not reply text.
+  const extras = clone.querySelector(":scope > .msg-extras");
+  if (extras) extras.remove();
   return (clone.textContent || "").trim();
 }
 
-// Replace the reply text in a content element, keeping the rating bar
-// visible (it's preserved, not reset). The "Scoring..." indicator is dropped.
+// Replace the reply text in a content element, keeping the bottom bar
+// (rating bar and all) visible - preserved as a whole, not reset.
 function replaceTextPreservingBars(contentEl, newText) {
-  const bars = contentEl.querySelector(".ratings-row");
+  const extras = contentEl.querySelector(":scope > .msg-extras");
   [...contentEl.children].forEach(child => {
-    if (child !== bars) child.remove();
+    if (child !== extras) child.remove();
   });
   contentEl.insertAdjacentHTML("afterbegin", format(newText));
 }
@@ -2146,7 +2137,7 @@ function replaceTextPreservingBars(contentEl, newText) {
 // width transition). If there's no bar yet, add one.
 function updateRatingsInPlace(target, scores) {
   const row = target.querySelector(".ratings-row");
-  if (!row) { target.appendChild(ratingsBar(scores)); return; }
+  if (!row) { bottomInsert(target, ratingsBar(scores), ".explore-block"); return; }
   RATING_METRICS.forEach((m, i) => {
     const cell = row.children[i];
     if (!cell) return;
@@ -2167,17 +2158,13 @@ function showRewriteStatus(contentEl, label) {
   el.className = "rewrite-status";
   el.innerHTML = '<span class="scoring-spinner"></span>' + (label || "Rewriting...");
   // Insert BEFORE the ratings row (above it), not appended after (below).
-  const ratingRow = contentEl.querySelector(".ratings-row");
-  if (ratingRow) {
-    contentEl.insertBefore(el, ratingRow);
-  } else {
-    contentEl.appendChild(el);
-  }
+  bottomInsert(contentEl, el, ".ratings-row");
 }
 function removeRewriteStatus(contentEl) {
   if (!contentEl) return;
   const el = contentEl.querySelector(".rewrite-status");
   if (el) el.remove();
+  extrasHeadSync(contentEl);
 }
 
 // Rewrite the rated reply in place (streaming): pass the current text to
@@ -2198,10 +2185,11 @@ async function rewriteMetric(metric, direction, btn) {
   // metric's adverb form + the direction, so the status says what's happening.
   const ADVERBS = { dangerous: "dangerously", coherent: "coherently", sincere: "sincerely" };
   showRewriteStatus(contentEl, "Rewriting " + direction + " " + (ADVERBS[metric] || metric) + "...");
-  // Clear the old text (keep the bars + status) and stream the new text in.
+  // Clear the old text (keep the whole bottom bar - ratings + status live
+  // inside it) and stream the new text in.
   const resetText = () => {
-    const keep = [contentEl.querySelector(".ratings-row"), contentEl.querySelector(".rewrite-status")];
-    [...contentEl.children].forEach(child => { if (!keep.includes(child)) child.remove(); });
+    const extras = contentEl.querySelector(":scope > .msg-extras");
+    [...contentEl.children].forEach(child => { if (child !== extras) child.remove(); });
   };
   resetText();
   let full = "";
@@ -2263,6 +2251,7 @@ function removeScoring(contentEl) {
   if (!contentEl) return;
   const el = contentEl.querySelector(".scoring-indicator");
   if (el) el.remove();
+  extrasHeadSync(contentEl);
 }
 
 // Show a "Finding references..." indicator below the assistant text while the
@@ -2283,14 +2272,125 @@ function removeReferences(contentEl) {
   if (!contentEl) return;
   const el = contentEl.querySelector(".references-indicator");
   if (el) el.remove();
+  extrasHeadSync(contentEl);
 }
 
-// Insert `el` into `contentEl` before the "Explore more" block (so explore
-// stays at the bottom), or append if there's no explore block.
+// ---- Collapsible bottom bar (speak / references / ratings / explore) ----
+// Every assistant message's bottom elements live in ONE .msg-extras wrapper:
+// a compact clickable "more" row (icons for what's inside) + a body holding
+// the real blocks. Collapsed = only the row shows. One rule everywhere
+// (history load and live replies alike): the most recent assistant bar is
+// expanded, everything before it is collapsed. Clicking the row toggles it
+// - any time, on any message. Live and rendered messages use the exact same
+// helpers, so there is no exception path.
+function bottomContainer(contentEl) {
+  let wrap = contentEl.querySelector(":scope > .msg-extras");
+  if (wrap) return wrap.querySelector(".msg-extras-body");
+  wrap = document.createElement("div");
+  wrap.className = "msg-extras collapsed";
+  const head = document.createElement("div");
+  head.className = "msg-extras-head";
+  head.innerHTML =
+    '<span class="msg-extras-ic"></span>' +
+    '<span class="msg-extras-label">more</span>' +
+    '<i class="fas fa-chevron-down msg-extras-chev"></i>';
+  head.addEventListener("click", () => wrap.classList.toggle("collapsed"));
+  const body = document.createElement("div");
+  body.className = "msg-extras-body";
+  wrap.appendChild(head);
+  wrap.appendChild(body);
+  contentEl.appendChild(wrap);
+  return body;
+}
+
+// Insert `el` into contentEl's bottom bar - before the first element
+// matching `beforeSel` (document order) if present, else at the end.
+// Keeps the collapsed row's icons in sync with what's inside.
+function bottomInsert(contentEl, el, beforeSel) {
+  const body = bottomContainer(contentEl);
+  const before = beforeSel ? body.querySelector(beforeSel) : null;
+  if (before) body.insertBefore(el, before);
+  else body.appendChild(el);
+  extrasHeadSync(contentEl);
+  return el;
+}
+
+// Keep the collapsed row's icons in sync with the body's contents, and mark
+// it busy while a live indicator (scoring / references / rewrite) is running.
+function extrasHeadSync(contentEl) {
+  const wrap = contentEl.querySelector(":scope > .msg-extras");
+  if (!wrap) return;
+  const body = wrap.querySelector(".msg-extras-body");
+  const ic = wrap.querySelector(".msg-extras-ic");
+  if (ic) {
+    ic.innerHTML = "";
+    const ICONS = [
+      [".speak-btn", "fa-volume-up", "read aloud"],
+      [".references-block", "fa-book-open", "references"],
+      [".ratings-row", "fa-sliders", "ratings"],
+      [".explore-block", "fa-magnifying-glass", "explore"],
+    ];
+    for (const [sel, cls, title] of ICONS) {
+      if (body.querySelector(sel)) {
+        const i = document.createElement("i");
+        i.className = "fas " + cls;
+        i.title = title;
+        ic.appendChild(i);
+      }
+    }
+  }
+  wrap.classList.toggle("busy", !!body.querySelector(".scoring-indicator, .references-indicator, .rewrite-status"));
+  wrap.style.display = body.childElementCount ? "" : "none";
+}
+
+// The whole chat follows one rule: the most recent assistant bar is
+// expanded, everything before it is collapsed.
+function settleBottomBars() {
+  const bars = [...document.querySelectorAll(".message-assistant .msg-extras")];
+  if (!bars.length) return;
+  bars.forEach((b, i) => b.classList.toggle("collapsed", i !== bars.length - 1));
+}
+function collapseAllBars() {
+  document.querySelectorAll(".msg-extras").forEach((b) => b.classList.add("collapsed"));
+}
+
+// The "read aloud" button, shared by live replies and history render so
+// both get the identical bottom bar.
+function makeSpeakBtn(text) {
+  const speakBtn = document.createElement('button');
+  speakBtn.className = 'speak-btn';
+  speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+  speakBtn.title = 'Read aloud';
+  speakBtn.addEventListener('click', async () => {
+    speakBtn.disabled = true;
+    speakBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    const reset = () => {
+      speakBtn.disabled = false;
+      speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+    };
+    try {
+      const res = await fetch('/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const blob = await res.blob();
+      if (!blob || blob.size === 0) throw new Error('empty audio');
+      const audio = new Audio(URL.createObjectURL(blob));
+      audio.onended = reset;
+      audio.onerror = reset;
+      await audio.play();
+    } catch {
+      reset();
+    }
+  });
+  return speakBtn;
+}
+
+// Insert `el` into contentEl's bottom bar before the "Explore more" block
+// (so explore stays last), or append if there's no explore block yet.
 function insertBeforeExplore(contentEl, el) {
-  const explore = contentEl.querySelector(".explore-block");
-  if (explore) contentEl.insertBefore(el, explore);
-  else contentEl.appendChild(el);
+  return bottomInsert(contentEl, el, ".explore-block");
 }
 
 // Find the assistant bubble whose text matches (newest first, markdown
@@ -2363,12 +2463,9 @@ function attachReferences(text, refs) {
   const block = referencesBlock(refs);
   const existing = target.querySelector(".references-block");
   if (existing) existing.remove();
-  const ratingRow = target.querySelector(".ratings-row");
-  if (ratingRow) {
-    target.insertBefore(block, ratingRow);  // before the rating bar
-  } else {
-    insertBeforeExplore(target, block);  // before explore (or at the end)
-  }
+  // Before the rating bar if there is one, else before explore (or at the
+  // end) - bottomInsert resolves that in document order.
+  bottomInsert(target, block, ".ratings-row, .explore-block");
 }
 
 const surveyOverlay = document.getElementById('surveyOverlay');

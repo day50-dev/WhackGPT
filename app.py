@@ -1019,6 +1019,12 @@ def filter_tools(ll):
         try:
             if isinstance(row, dict):
                 row = dict(row)
+                # UI-only fields must never go back to the model: the saved
+                # 'reasoning' text is the client's thinking block - feeding
+                # the model's own raw thoughts back in bloats the context
+                # and leaks the scripted flow (e.g. the voice-call dance)
+                # into its planning.
+                row.pop("reasoning", None)
             elif isinstance(row, str):
                 row = {"role": "user", "content": row}
             else:
