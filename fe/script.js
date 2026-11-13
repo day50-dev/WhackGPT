@@ -1241,15 +1241,31 @@ function callSend(text) {
 
 // sendMessage hands every finished reply here
 function callReply(text) {
-  if (!_call || _call.phase !== 'thinking') return;
+  if (!_call || _call.phase === 'ended') return;
   // A reply with no actual words ('...', '…', '!!') has nothing for TTS - it
   // would speak a silence blip. The server already retried these; if one
   // still slips through, keep the line open instead of speaking it.
-  if (!text || !text.trim() || !/[a-z0-9]/i.test(text)) { callSet('listening'); return; }
+  if (!text || !text.trim() || !/[a-z0-9]/i.test(text)) {
+    if (_call.phase === 'thinking') callSet('listening');
+    return;
+  }
+  // The model's opening line often finishes streaming while the phone is
+  // still ringing (it talks right after start_voice_call()). Stash it and
+  // speak it the moment they answer - otherwise it lands in the chat bubble
+  // and the caller just hears silence.
+  if (_call.phase === 'ringing') { _call.pendingSpeak = text; return; }
+  // Speak any reply that lands while the call is up: the normal thinking
+  // turn, or text that streamed in while listening/muted (opening line,
+  // slow pre-tool-call text).
+  if (_call.phase !== 'thinking' && _call.phase !== 'listening' && _call.phase !== 'muted') return;
   // TTS generation takes a few seconds - its own phase so the wait reads as
   // "speech is coming", not a dead line. 'speaking' only shows once audio
   // actually starts.
   callSet('tts');
+  // Watchdog: never leave the call stuck on "generating speech" forever.
+  const watchdog = setTimeout(() => {
+    if (_call && _call.phase === 'tts') { console.log('[call] tts timed out'); callSet('listening'); }
+  }, 45000);
   fetch('/speak', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1257,16 +1273,22 @@ function callReply(text) {
   })
     .then((res) => res.blob())
     .then((blob) => {
+      clearTimeout(watchdog);
       if (!_call || _call.phase !== 'tts') return;
+      if (!blob || blob.size === 0) { console.log('[call] tts returned empty audio'); callSet('listening'); return; }
       callSet('speaking');
       const audio = new Audio(URL.createObjectURL(blob));
       const done = () => { if (_call && _call.audio === audio) callSet('listening'); };
       audio.onended = done;
-      audio.onerror = done;
+      audio.onerror = (e) => { console.log('[call] audio error', e); done(); };
       _call.audio = audio;
-      audio.play().catch(done);
+      audio.play().catch((e) => { console.log('[call] play blocked', e); done(); });
     })
-    .catch(() => { if (_call && _call.phase === 'tts') callSet('listening'); });
+    .catch((e) => {
+      clearTimeout(watchdog);
+      console.log('[call] tts fetch failed', e);
+      if (_call && _call.phase === 'tts') callSet('listening');
+    });
 }
 
 var RINGTONES = [
@@ -1287,16 +1309,28 @@ function callRing(out) {
   ring.play().catch((e) => console.log('ringtone failed:', e));
   _call.ring = ring;
   callSet('ringing');
+  // The model's opening line may have finished streaming in the SAME turn it
+  // rang (the server saves it and publishes the ring together). That text
+  // arrived while _call was null, so callReply was a no-op - adopt it now.
+  // (callReply stashes it again if the stream ends after the ring: same text.)
+  if (!out && _lastStreamedContent && _lastStreamEndTime && (Date.now() - _lastStreamEndTime) < 4000) {
+    _call.pendingSpeak = _lastStreamedContent;
+  }
 }
 
 function callAnswer() {
   if (!_call || _call.phase !== 'ringing') return;
+  // The model may have already said its opening line while the phone was
+  // ringing - speak it now, instantly, before they even say anything.
+  const opening = _call.pendingSpeak;
+  _call.pendingSpeak = null;
   callSet('listening'); // you talk first
   fetch('call_state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ uid: _uid, state: 'live' }),
   });
+  if (opening) callReply(opening);
 }
 
 function callToggleMute() {
