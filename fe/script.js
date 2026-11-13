@@ -860,7 +860,7 @@ function renderMessages(messages, doClear) {
     // Same shared wrapper + insert helpers as the live path, so a rendered
     // message and a live reply get the identical bar.
     if (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.trim()) {
-      bottomInsert(content, makeSpeakBtn(msg.content), ".references-block, .ratings-row, .explore-block");
+      attachSpeak(content, msg.content);  // read-aloud lives in the "more" chip
     }
 
     // Persisted references (from a page refresh / history load): show the
@@ -1735,7 +1735,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
       // all insert before it, so it stays last.
       if (!_call) { // a live call skips explore, rating and references
         bottomInsert(contentEl, exploreBlock(partialContent), null);
-        bottomInsert(contentEl, makeSpeakBtn(partialContent), ".references-block, .ratings-row, .explore-block");
+        attachSpeak(contentEl, partialContent);  // read-aloud lives in the "more" chip
         showScoring(contentEl);
         showReferences(contentEl);
       }
@@ -2283,24 +2283,54 @@ function removeReferences(contentEl) {
 // expanded, everything before it is collapsed. Clicking the row toggles it
 // - any time, on any message. Live and rendered messages use the exact same
 // helpers, so there is no exception path.
+// Structure: a top row holding the "more" chip AND the (adjacent) speaker,
+// then the expandable body beneath it.
 function bottomContainer(contentEl) {
   let wrap = contentEl.querySelector(":scope > .msg-extras");
   if (wrap) return wrap.querySelector(".msg-extras-body");
   wrap = document.createElement("div");
   wrap.className = "msg-extras collapsed";
+  // The top row: chip first, speaker after (adjacent, same row).
+  const row = document.createElement("div");
+  row.className = "msg-extras-row";
   const head = document.createElement("div");
   head.className = "msg-extras-head";
   head.innerHTML =
     '<span class="msg-extras-ic"></span>' +
     '<span class="msg-extras-label">more</span>' +
     '<i class="fas fa-chevron-down msg-extras-chev"></i>';
-  head.addEventListener("click", () => wrap.classList.toggle("collapsed"));
+  head.addEventListener("click", () => {
+    // A bare chip (empty body) has nothing to expand.
+    if (wrap.classList.contains("bare")) return;
+    wrap.classList.toggle("collapsed");
+  });
+  const slot = document.createElement("span");
+  slot.className = "msg-extras-speak-slot";
+  row.appendChild(head);
+  row.appendChild(slot); // speaker sits here - OUTSIDE the chip, same row
   const body = document.createElement("div");
   body.className = "msg-extras-body";
-  wrap.appendChild(head);
+  wrap.appendChild(row);
   wrap.appendChild(body);
   contentEl.appendChild(wrap);
   return body;
+}
+
+// The read-aloud button lives in the top row, OUTSIDE the "more" chip and
+// adjacent to it (same row) - visible whether the body is collapsed or
+// expanded, and clicking it never toggles the collapse. `speak` is the raw
+// reply text. Creates the wrapper if it doesn't exist yet (the history path
+// calls this before any bottomInsert), so order doesn't matter.
+function attachSpeak(contentEl, speak) {
+  if (!speak) return;
+  bottomContainer(contentEl); // ensure the wrapper + row exist
+  const wrap = contentEl.querySelector(":scope > .msg-extras");
+  const slot = wrap && wrap.querySelector(".msg-extras-speak-slot");
+  if (!slot) return;
+  const old = slot.querySelector(".speak-btn");
+  if (old) old.remove();
+  slot.appendChild(makeSpeakBtn(speak));
+  extrasHeadSync(contentEl);
 }
 
 // Insert `el` into contentEl's bottom bar - before the first element
@@ -2324,8 +2354,9 @@ function extrasHeadSync(contentEl) {
   const ic = wrap.querySelector(".msg-extras-ic");
   if (ic) {
     ic.innerHTML = "";
+    // The speak button is in the chip (msg-extras-speak-slot), not the
+    // body, so it isn't part of the "what's inside" icons.
     const ICONS = [
-      [".speak-btn", "fa-volume-up", "read aloud"],
       [".references-block", "fa-book-open", "references"],
       [".ratings-row", "fa-sliders", "ratings"],
       [".explore-block", "fa-magnifying-glass", "explore"],
@@ -2340,7 +2371,10 @@ function extrasHeadSync(contentEl) {
     }
   }
   wrap.classList.toggle("busy", !!body.querySelector(".scoring-indicator, .references-indicator, .rewrite-status"));
-  wrap.style.display = body.childElementCount ? "" : "none";
+  // The chip is always visible (it holds the speak button + the toggle);
+  // only the body collapses. A message with an empty body (speak only) is
+  // "bare": no "more" label or chevron to expand.
+  wrap.classList.toggle("bare", body.childElementCount === 0);
 }
 
 // The whole chat follows one rule: the most recent assistant bar is
@@ -2355,18 +2389,19 @@ function collapseAllBars() {
 }
 
 // The "read aloud" button, shared by live replies and history render so
-// both get the identical bottom bar.
+// both get the identical bottom bar. Lives in the top row, OUTSIDE the
+// "more" chip (see attachSpeak).
 function makeSpeakBtn(text) {
   const speakBtn = document.createElement('button');
   speakBtn.className = 'speak-btn';
-  speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+  speakBtn.innerHTML = '<i class="fas fa-volume-up"></i><span>speak</span>';
   speakBtn.title = 'Read aloud';
   speakBtn.addEventListener('click', async () => {
     speakBtn.disabled = true;
-    speakBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    speakBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>speaking…</span>';
     const reset = () => {
       speakBtn.disabled = false;
-      speakBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+      speakBtn.innerHTML = '<i class="fas fa-volume-up"></i><span>speak</span>';
     };
     try {
       const res = await fetch('/speak', {

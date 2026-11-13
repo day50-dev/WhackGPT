@@ -1313,9 +1313,15 @@ textarea {
 /* ---- Collapsible bottom bar (speak / references / ratings / explore) ---- */
 /* One wrapper per assistant message: a compact clickable "more" row (icons
    for what's inside) + the body holding the real blocks. Collapsed = row
-   only. The most recent message's bar stays expanded; the rest collapse. */
+   only. The most recent message's bar stays expanded; the rest collapse.
+   The speaker button is OUTSIDE the chip, adjacent to it on the same row. */
 .msg-extras {
   margin-top: 0.5rem;
+}
+.msg-extras-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .msg-extras-head {
   display: inline-flex;
@@ -1342,6 +1348,35 @@ textarea {
 .msg-extras-ic i {
   font-size: 0.8rem;
   opacity: 0.85;
+}
+/* The read-aloud button: a separate pill OUTSIDE the "more" chip, adjacent
+   on the same row - visible whether the body is collapsed or expanded.
+   It never toggles the collapse (it's not inside the chip). */
+.msg-extras-speak-slot {
+  display: inline-flex;
+  align-items: center;
+}
+.msg-extras-speak-slot .speak-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--slightly-lighter);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.msg-extras-speak-slot .speak-btn:hover {
+  background: var(--pill-hover);
+  color: var(--primary);
+}
+.msg-extras-speak-slot .speak-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 .msg-extras-chev {
   font-size: 0.62rem;
@@ -1374,6 +1409,11 @@ textarea {
   margin-top: 6px;
 }
 .msg-extras.collapsed .msg-extras-body {
+  display: none;
+}
+/* Bare: empty body (speak-only message) - nothing to expand, so the whole
+   chip hides; only the speaker pill remains. */
+.msg-extras.bare .msg-extras-head {
   display: none;
 }
 
