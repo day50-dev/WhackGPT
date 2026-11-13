@@ -754,6 +754,11 @@ function renderMessages(messages, doClear) {
         handleGameRow(msg.content);
         return; // the board is the display - no message bubble
       }
+      if (msg.content.name === 'show_code') {
+        // past code window: a chip that re-opens it (code lives on the row)
+        showCodeChip(messagesContainer, msg.content.language, msg.content.code);
+        return;
+      }
       if (msg.content.name === 'web_search' || msg.content.name === 'web_fetch' || msg.content.name === 'get_history' || msg.content.name === 'analyze_image' || msg.content.name === 'get_theme' || msg.content.name === 'set_theme' || msg.content.name === 'set_theme_color' || msg.content.name === 'start_voice_call' || msg.content.name === 'end_voice_call') {
         return; // the model's answer is the display; the search/fetch/analysis is intermediate
       }
@@ -1379,6 +1384,11 @@ function set_context(what) {
       if (message.var && message.value) {
         document.documentElement.style.setProperty(message.var, message.value);
       }
+      return;
+    }
+    if (message.type === 'show_code') {
+      // the model pushed code into the code window (right-side panel)
+      openCodePanel(message.language, message.code);
       return;
     }
     if (message.type === 'voice_call') {
@@ -2459,5 +2469,260 @@ document.querySelector(".chat-container").addEventListener("click", () => {
   sidebar.classList.remove("active");
   if (isMobile()) hamburgerMenu.style.display = "block";
 });
+
+// ================= CODE WINDOW =================
+// Right-side panel the model pushes code into via the show_code tool:
+// syntax highlighting, line numbers, copy + download, and per-line feedback -
+// click any line to yell at the model about that exact line.
+
+const CODE_LANGS = {
+  python: { ext: 'py', label: 'Python' },
+  javascript: { ext: 'js', label: 'JavaScript' },
+  js: { ext: 'js', label: 'JavaScript' },
+  typescript: { ext: 'ts', label: 'TypeScript' },
+  html: { ext: 'html', label: 'HTML' },
+  css: { ext: 'css', label: 'CSS' },
+  bash: { ext: 'sh', label: 'Bash' },
+  sh: { ext: 'sh', label: 'Bash' },
+  shell: { ext: 'sh', label: 'Shell' },
+  json: { ext: 'json', label: 'JSON' },
+  sql: { ext: 'sql', label: 'SQL' },
+  text: { ext: 'txt', label: 'Text' },
+  plain: { ext: 'txt', label: 'Text' },
+  "c++": { ext: 'cpp', label: 'C++' },
+  go: { ext: 'go', label: 'Go' },
+  rust: { ext: 'rs', label: 'Rust' },
+  java: { ext: 'java', label: 'Java' },
+};
+function codeLangInfo(lang) {
+  return CODE_LANGS[String(lang || 'text').toLowerCase()] || { ext: 'txt', label: lang || 'text' };
+}
+
+// ---- minimal dependency-free highlighter (escape-first, XSS-safe) ----
+const HL_SPECS = {
+  python: [
+    { cls: 'tok-str', re: '"""[\\s\\S]*?"""|\'\'\'[\\s\\S]*?\'\'\'' },
+    { cls: 'tok-com', re: '#[^\\n]*' },
+    { cls: 'tok-str', re: '"(?:\\\\.|[^"\\\\\\n])*"|\'(?:\\\\.|[^\'\\\\\\n])*\'' },
+    { cls: 'tok-dec', re: '@[A-Za-z_][\\w.]*' },
+    { cls: 'tok-kw', re: '\\b(?:def|class|return|if|elif|else|for|while|in|not|and|or|is|import|from|as|with|try|except|finally|raise|pass|break|continue|lambda|yield|global|nonlocal|assert|del|async|await)\\b' },
+    { cls: 'tok-const', re: '\\b(?:True|False|None|self|cls)\\b' },
+    { cls: 'tok-num', re: '\\b\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?j?\\b' },
+    { cls: 'tok-fn', re: '\\b[A-Za-z_]\\w*(?=\\s*\\()' },
+  ],
+  javascript: [
+    { cls: 'tok-com', re: '/\\*[\\s\\S]*?\\*/' },
+    { cls: 'tok-com', re: '//[^\\n]*' },
+    { cls: 'tok-str', re: '`(?:\\\\.|[^`\\\\])*`' },
+    { cls: 'tok-str', re: '"(?:\\\\.|[^"\\\\\\n])*"|\'(?:\\\\.|[^\'\\\\\\n])*\'' },
+    { cls: 'tok-kw', re: '\\b(?:const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|delete|typeof|instanceof|in|of|class|extends|super|import|export|from|default|try|catch|finally|throw|async|await|yield|this|void)\\b' },
+    { cls: 'tok-const', re: '\\b(?:true|false|null|undefined|NaN|Infinity)\\b' },
+    { cls: 'tok-num', re: '\\b0x[\\da-fA-F]+\\b|\\b\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b' },
+    { cls: 'tok-fn', re: '\\b(?:console|window|document|fetch|JSON|Math|Object|Array|Promise|setTimeout|setInterval|clearTimeout|clearInterval)\\b' },
+    { cls: 'tok-fn', re: '\\b[A-Za-z_$][\\w$]*(?=\\s*\\()' },
+  ],
+  html: [
+    { cls: 'tok-com', re: '<!--[\\s\\S]*?-->' },
+    { cls: 'tok-kw', re: '<!DOCTYPE[^>]*>' },
+    { cls: 'tok-tag', re: '</?[a-zA-Z][\\w-]*|/?>' },
+    { cls: 'tok-attr', re: '[a-zA-Z-]+(?=\\s*=)' },
+    { cls: 'tok-str', re: '"[^"\\n]*"|\'[^\'\\n]*\'' },
+    { cls: 'tok-num', re: '&[a-zA-Z#0-9]+;' },
+  ],
+  css: [
+    { cls: 'tok-com', re: '/\\*[\\s\\S]*?\\*/' },
+    { cls: 'tok-str', re: '"(?:\\\\.|[^"\\\\\\n])*"|\'(?:\\\\.|[^\'\\\\\\n])*\'' },
+    { cls: 'tok-kw', re: '@[a-zA-Z-]+' },
+    { cls: 'tok-num', re: '#[0-9a-fA-F]{3,8}\\b|\\b\\d+(?:\\.\\d+)?(?:px|em|rem|%|vh|vw|vmin|vmax|s|ms|deg|fr)?\\b' },
+    { cls: 'tok-attr', re: '\\b[a-z-]+(?=\\s*:) ' },
+    { cls: 'tok-fn', re: '::?[a-z-]+' },
+  ],
+  json: [
+    { cls: 'tok-attr', re: '"(?:\\\\.|[^"\\\\])*"(?=\\s*:) ' },
+    { cls: 'tok-str', re: '"(?:\\\\.|[^"\\\\])*"' },
+    { cls: 'tok-num', re: '-?\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b' },
+    { cls: 'tok-const', re: '\\b(?:true|false|null)\\b' },
+  ],
+  bash: [
+    { cls: 'tok-com', re: '#[^\\n]*' },
+    { cls: 'tok-str', re: '"(?:\\\\.|[^"\\\\\\n])*"|\'(?:\\\\.|[^\'\\\\\\n])*\'' },
+    { cls: 'tok-var', re: '\\$[A-Za-z_{][\\w{]*' },
+    { cls: 'tok-kw', re: '\\b(?:if|then|else|elif|fi|for|while|do|done|case|esac|function|return|exit|local|export|source|set|unset|shift)\\b' },
+    { cls: 'tok-fn', re: '\\b(?:echo|cd|ls|cat|grep|awk|sed|curl|wget|python|python3|node|npm|npx|git|docker|sudo|make|pip|pip3|brew|apt|apt-get|brew)\\b' },
+    { cls: 'tok-num', re: '\\b\\d+\\b' },
+  ],
+};
+HL_SPECS.generic = [
+  { cls: 'tok-com', re: '#[^\\n]*' },
+  { cls: 'tok-str', re: '"(?:\\\\.|[^"\\\\\\n])*"|\'(?:\\\\.|[^\'\\\\\\n])*\'' },
+  { cls: 'tok-num', re: '\\b\\d+(?:\\.\\d+)?\\b' },
+];
+
+function highlightCode(code, lang) {
+  // returns an array of lines; each line = array of {cls, text}
+  const key = String(lang || 'generic').toLowerCase();
+  const spec = HL_SPECS[key] || HL_SPECS.generic;
+  const re = new RegExp(spec.map((p) => '(' + p.re + ')').join('|'), 'g');
+  const lines = [[]];
+  const push = (text, cls) => {
+    const parts = text.split('\n');
+    parts.forEach((p, i) => {
+      if (i > 0) lines.push([]);
+      if (p) lines[lines.length - 1].push({ cls: cls || '', text: p });
+    });
+  };
+  let pos = 0, m;
+  while ((m = re.exec(code)) !== null) {
+    if (m.index > pos) push(code.slice(pos, m.index), null);
+    let cls = null;
+    for (let g = 1; g < m.length; g++) {
+      if (m[g] !== undefined) { cls = spec[g - 1].cls; break; }
+    }
+    push(m[0], cls);
+    pos = re.lastIndex;
+    if (m[0] === '') re.lastIndex++; // safety: never spin
+  }
+  if (pos < code.length) push(code.slice(pos), null);
+  return lines;
+}
+
+// ---- the panel ----
+let _codePanel = null; // { el, language, code, version }
+
+function codePanelEl() {
+  if (_codePanel && document.contains(_codePanel.el)) return _codePanel.el;
+  const el = document.createElement('section');
+  el.className = 'code-panel';
+  el.innerHTML =
+    '<div class="cp-bar">' +
+    '  <span class="cp-dots"><i></i><i></i><i></i></span>' +
+    '  <span class="cp-title">code</span>' +
+    '  <span class="cp-actions">' +
+    '    <button type="button" class="cp-btn" id="cpCopy" title="Copy code"><i class="fas fa-copy"></i></button>' +
+    '    <button type="button" class="cp-btn" id="cpDownload" title="Download"><i class="fas fa-download"></i></button>' +
+    '    <button type="button" class="cp-btn cp-close" id="cpClose" title="Close"><i class="fas fa-xmark"></i></button>' +
+    '  </span>' +
+    '</div>' +
+    '<div class="cp-body"></div>' +
+    '<div class="cp-yell" hidden>' +
+    '  <div class="cp-yell-hd"><span class="cp-yell-line"></span><button type="button" class="cp-yell-x" title="Close"><i class="fas fa-xmark"></i></button></div>' +
+    '  <textarea rows="2" placeholder="yell at the model about this line..."></textarea>' +
+    '  <button type="button" class="cp-yell-send">yell</button>' +
+    '</div>';
+  document.querySelector('.app-container').appendChild(el);
+  _codePanel = { el, language: 'text', code: '', version: 0 };
+  // static wiring
+  el.querySelector('#cpClose').addEventListener('click', () => {
+    el.classList.remove('open');
+  });
+  el.querySelector('#cpCopy').addEventListener('click', () => {
+    if (!_codePanel) return;
+    navigator.clipboard.writeText(_codePanel.code)
+      .then(() => snackbar('code copied'))
+      .catch(() => snackbar('copy failed'));
+  });
+  el.querySelector('#cpDownload').addEventListener('click', () => {
+    if (!_codePanel) return;
+    const info = codeLangInfo(_codePanel.language);
+    const blob = new Blob([_codePanel.code], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'code.' + info.ext;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+  const yell = el.querySelector('.cp-yell');
+  yell.querySelector('.cp-yell-x').addEventListener('click', () => {
+    yell.hidden = true;
+    const sel = el.querySelector('.cl-line.sel');
+    if (sel) sel.classList.remove('sel');
+  });
+  yell.querySelector('.cp-yell-send').addEventListener('click', cpSendYell);
+  yell.querySelector('textarea').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); cpSendYell(); }
+  });
+  return el;
+}
+
+function cpSendYell() {
+  const el = _codePanel && _codePanel.el;
+  if (!el || !el._yellCtx) return;
+  const { lineNo, lineText } = el._yellCtx;
+  const text = el.querySelector('.cp-yell textarea').value.trim();
+  const shown = lineText.length > 80 ? lineText.slice(0, 80) + '…' : lineText;
+  const msg = text
+    ? 'line ' + lineNo + ' ("' + shown + '") — ' + text
+    : 'line ' + lineNo + ' ("' + shown + '") — fix this';
+  el.querySelector('.cp-yell').hidden = true;
+  el._yellCtx = null;
+  sendMessage(msg, false, false, null);
+}
+
+function openCodePanel(language, code) {
+  const el = codePanelEl();
+  _codePanel.language = language || 'text';
+  _codePanel.code = String(code || '');
+  _codePanel.version++;
+  const info = codeLangInfo(_codePanel.language);
+  el.querySelector('.cp-title').textContent =
+    info.label.toLowerCase() + ' · ' + _codePanel.code.split('\n').length + ' lines · v' + _codePanel.version;
+  // render highlighted lines
+  const body = el.querySelector('.cp-body');
+  body.innerHTML = '';
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const lines = highlightCode(_codePanel.code, _codePanel.language);
+  const frag = document.createDocumentFragment();
+  lines.forEach((toks, i) => {
+    const row = document.createElement('div');
+    row.className = 'cl-line';
+    row.dataset.line = i + 1;
+    const num = document.createElement('span');
+    num.className = 'cl-num';
+    num.textContent = i + 1;
+    const codeSpan = document.createElement('span');
+    codeSpan.className = 'cl-code';
+    if (toks.length === 0) {
+      codeSpan.innerHTML = '&nbsp;';
+    } else {
+      codeSpan.innerHTML = toks.map((t) =>
+        t.cls ? '<span class="' + t.cls + '">' + esc(t.text) + '</span>' : esc(t.text)
+      ).join('');
+    }
+    row.appendChild(num);
+    row.appendChild(codeSpan);
+    row.addEventListener('click', () => {
+      el.querySelectorAll('.cl-line.sel').forEach((r) => r.classList.remove('sel'));
+      row.classList.add('sel');
+      const lineText = _codePanel.code.split('\n')[i] || '';
+      el._yellCtx = { lineNo: i + 1, lineText };
+      const yell = el.querySelector('.cp-yell');
+      yell.querySelector('.cp-yell-line').textContent =
+        'line ' + (i + 1) + (lineText ? ' — "' + lineText.slice(0, 60) + (lineText.length > 60 ? '…' : '') + '"' : '');
+      yell.querySelector('textarea').value = '';
+      yell.hidden = false;
+      yell.querySelector('textarea').focus();
+      el.scrollIntoView({ block: 'nearest' });
+    });
+    frag.appendChild(row);
+  });
+  body.appendChild(frag);
+  body.scrollTop = 0;
+  el.querySelector('.cp-yell').hidden = true;
+  el._yellCtx = null;
+  el.classList.add('open');
+}
+
+function showCodeChip(container, language, code) {
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'code-chip';
+  const info = codeLangInfo(language);
+  const n = String(code || '').split('\n').length;
+  chip.innerHTML = '<i class="fas fa-code"></i><span>' + info.label + ' · ' + n + ' lines · open</span>';
+  chip.addEventListener('click', () => openCodePanel(language, code));
+  container.appendChild(chip);
+}
 
 init();
