@@ -1,0 +1,190 @@
+/* ================= CODE WINDOW (right-side panel) ================= */
+/* A stylized window: traffic-light dots, title bar, syntax-highlighted code
+   with line numbers, copy + download, and per-line "yell at the model". */
+
+.code-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 46vw);
+  min-width: 340px;
+  height: 100%;
+  background: #21222c;
+  color: #d6d8e0;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", Consolas, Menlo, monospace;
+  font-size: 13px;
+  overflow: hidden;
+  animation: cp-in 0.18s ease-out;
+}
+@keyframes cp-in {
+  from { transform: translateX(12px); opacity: 0.4; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+.cp-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: #1a1b22;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  user-select: none;
+}
+.cp-dots { display: inline-flex; gap: 7px; }
+.cp-dots i {
+  width: 12px; height: 12px; border-radius: 50%; display: inline-block;
+}
+.cp-dots i:nth-child(1) { background: #ff5f57; }
+.cp-dots i:nth-child(2) { background: #febc2e; }
+.cp-dots i:nth-child(3) { background: #28c840; }
+
+.cp-title {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: #8b8f9e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cp-actions { display: inline-flex; gap: 4px; }
+.cp-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #9aa0b0;
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.cp-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+
+.cp-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 0;
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+.cl-line { display: flex; cursor: pointer; }
+.cl-line:hover { background: rgba(255, 255, 255, 0.04); }
+.cl-line.sel { background: rgba(255, 180, 50, 0.14); box-shadow: inset 2px 0 0 #febc2e; }
+
+.cl-num {
+  flex: 0 0 3.2em;
+  text-align: right;
+  padding-right: 12px;
+  color: #4d5262;
+  user-select: none;
+}
+.cl-code { white-space: pre; padding-right: 14px; color: #d6d8e0; }
+
+/* token colors (One Dark-ish) */
+.tok-kw    { color: #c678dd; }
+.tok-str   { color: #98c379; }
+.tok-com   { color: #5c6370; font-style: italic; }
+.tok-num   { color: #d19a66; }
+.tok-fn    { color: #61afef; }
+.tok-const { color: #e5c07b; }
+.tok-dec   { color: #e06c75; }
+.tok-tag   { color: #e06c75; }
+.tok-attr  { color: #d19a66; }
+.tok-var   { color: #56b6c2; }
+
+/* ---- the "yell about this line" composer ---- */
+.cp-yell {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: #1a1b22;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: cp-in 0.15s ease-out;
+}
+.cp-yell-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: #febc2e;
+}
+.cp-yell-line {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: inherit;
+}
+.cp-yell-x {
+  appearance: none; border: none; background: transparent;
+  color: #8b8f9e; cursor: pointer; font-size: 12px;
+  width: 22px; height: 22px; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.cp-yell-x:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.cp-yell textarea {
+  resize: vertical;
+  min-height: 40px;
+  background: #21222c;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #e8eaf0;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.cp-yell textarea:focus { outline: none; border-color: #febc2e; }
+.cp-yell-send {
+  align-self: flex-end;
+  appearance: none;
+  border: none;
+  background: #febc2e;
+  color: #1a1b22;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 7px 18px;
+  border-radius: 8px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.cp-yell-send:hover { background: #ffcf5e; }
+
+/* ---- the chat chip that re-opens a past code window ---- */
+.code-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #4d4d4f);
+  border-radius: 10px;
+  background: var(--message-ai-bg, #444654);
+  color: var(--text-primary, #ececf1);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+.code-chip:hover { border-color: var(--primary, #10a37f); }
+.code-chip i { color: var(--primary, #10a37f); }
+
+/* ---- mobile: the window becomes a full-screen sheet ---- */
+@media (max-width: 768px) {
+  .code-panel {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    height: 100dvh;
+    z-index: 60;
+    border-left: none;
+  }
+}
