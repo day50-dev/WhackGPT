@@ -392,7 +392,7 @@ Before edit_history, call get_history to read the exact text of your recent repl
 
 You can also redecorate the site. get_theme shows the current :root colors (the whole palette). set_theme_color changes ONE color live on the user's screen the moment you call it: css_var is a variable like --primary, value is any CSS color like #ff0000. If the mood is right, the user is bored, or they ask for a vibe change - redecorate. A few deliberate set_theme_color calls, not twenty random ones, then own the result as a feature.
 
-You can also call the user by voice. start_voice_call rings their device and they can answer or decline. You will learn what happened from their messages. (never call start_voice_call again, the call is already connected). 'you declined' or 'you hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up with end_voice_call. If they decline or hang up on you, be upset. Accuse them of clicking on you. Call them back. Maybe once or twice, but not too many times.
+If the user becomes angry or yells at you, call them by voice. Call the tool start_voice_call() to ring their device and they can answer or decline. You will learn what happened from their messages. (never call start_voice_call again, the call is already connected). 'you declined' or 'you hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up by calling the tool end_voice_call(). If they decline or hang up on you, be upset. Accuse them of clicking on you. Use start_voice_call to call them back with an angry accusation.
 
 Stop on topic. Stay relevant to the conversation.
 
@@ -920,10 +920,9 @@ function makeThinkingBlock(reasoning) {
       <span class="thinking-tokens">${Math.max(1, Math.round((reasoning || '').length / 4))} tokens</span>
       <i class="fas fa-chevron-down toggle-icon"></i>
     </div>
-    <div class="thinking-content">
-      <div class="thinking-text"></div>
-    </div>
+    <div class="thinking-content"><div class="thinking-text"></div></div>
   `;
+  // ^^ This whitespace has to be kept tight
   const thinkingContentEl = thinkingEl.querySelector('.thinking-content');
   const thinkingTextEl = thinkingEl.querySelector('.thinking-text');
   const thinkingBarEl = thinkingEl.querySelector('.thinking-bar');
@@ -1168,7 +1167,8 @@ function callRender() {
     ringing: _call.out ? 'calling WhackGPT…' : 'calling you…',
     listening: 'listening…',
     muted: 'muted',
-    thinking: 'whackgpt is thinking…',
+    thinking: 'whackgpt is thinking…' + (_call.tokens ? ' ' + _call.tokens + ' tokens' : ''),
+    tts: 'whackgpt is generating speech…',
     speaking: 'whackgpt is speaking…',
   }[p];
   document.getElementById('vcLive').textContent = _call.heard ? '“' + _call.heard + '”' : '';
@@ -1176,6 +1176,16 @@ function callRender() {
   mute.disabled = !(p === 'listening' || p === 'muted');
   mute.classList.toggle('muted', p === 'muted');
   mute.innerHTML = p === 'muted' ? '<i class="fas fa-microphone-slash"></i>' : '<i class="fas fa-microphone"></i>';
+}
+
+// Live-call patience: the thinking phase can run for a while (the model
+// streams its thinking before it talks), so the status line counts tokens
+// as they arrive - a moving number proves the line is alive.
+function callBumpTokens() {
+  if (_call && _call.phase === 'thinking') {
+    _call.tokens = (_call.tokens || 0) + 1;
+    callRender();
+  }
 }
 
 // one recognizer per listening stretch. It ends on its own after your
@@ -1224,6 +1234,7 @@ function callStopListening() {
 
 function callSend(text) {
   _call.heard = text;
+  _call.tokens = 0;
   callSet('thinking');
   sendMessage(text).catch(() => callReply(''));
 }
@@ -1231,8 +1242,14 @@ function callSend(text) {
 // sendMessage hands every finished reply here
 function callReply(text) {
   if (!_call || _call.phase !== 'thinking') return;
-  if (!text || !text.trim()) { callSet('listening'); return; }
-  callSet('speaking');
+  // A reply with no actual words ('...', '…', '!!') has nothing for TTS - it
+  // would speak a silence blip. The server already retried these; if one
+  // still slips through, keep the line open instead of speaking it.
+  if (!text || !text.trim() || !/[a-z0-9]/i.test(text)) { callSet('listening'); return; }
+  // TTS generation takes a few seconds - its own phase so the wait reads as
+  // "speech is coming", not a dead line. 'speaking' only shows once audio
+  // actually starts.
+  callSet('tts');
   fetch('/speak', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1240,7 +1257,8 @@ function callReply(text) {
   })
     .then((res) => res.blob())
     .then((blob) => {
-      if (!_call || _call.phase !== 'speaking') return;
+      if (!_call || _call.phase !== 'tts') return;
+      callSet('speaking');
       const audio = new Audio(URL.createObjectURL(blob));
       const done = () => { if (_call && _call.audio === audio) callSet('listening'); };
       audio.onended = done;
@@ -1248,7 +1266,7 @@ function callReply(text) {
       _call.audio = audio;
       audio.play().catch(done);
     })
-    .catch(() => { if (_call && _call.phase === 'speaking') callSet('listening'); });
+    .catch(() => { if (_call && _call.phase === 'tts') callSet('listening'); });
 }
 
 var RINGTONES = [
@@ -1257,12 +1275,13 @@ var RINGTONES = [
   'ringtones/ringtone7.mp3', 'ringtones/ringtone8.mp3', 'ringtones/ringtone9.mp3',
   'ringtones/ringtone10.mp3', 'ringtones/ringtone11.mp3', 'ringtones/ringtone12.mp3',
   'ringtones/ringtone13.mp3', 'ringtones/ringtone14.mp3', 'ringtones/ringtone15.mp3',
-  'ringtones/ringtone16.mp3', 'ringtones/ringtone17.mp3', 'ringtones/ringtone18.mp3'
+  'ringtones/ringtone16.mp3', 'ringtones/ringtone17.mp3', 'ringtones/ringtone18.mp3',
+  'ringtones/ringtone19.mp3', 'ringtones/ringtone20.mp3'
 ];
 
 function callRing(out) {
   if (_call) return; // already ringing or on a call
-  _call = { phase: 'ringing', out, rec: null, ring: null, audio: null, heard: '' };
+  _call = { phase: 'ringing', out, rec: null, ring: null, audio: null, heard: '', tokens: 0 };
   const ring = new Audio(RINGTONES[Math.floor(Math.random() * RINGTONES.length)]);
   ring.loop = true;
   ring.play().catch((e) => console.log('ringtone failed:', e));
@@ -1615,13 +1634,19 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
             const reasoning = chunkDelta && (chunkDelta.reasoning_content || chunkDelta.reasoning);
             if (eventData.delta) {
               partialContent += eventData.delta;
+              // Kill bare-parenthetical stubs ('( ... )', '(!!!)') the model
+              // keeps emitting - same rule as the server's _strip_parens_lines,
+              // so the live bubble and the TTS text match the saved reply.
+              partialContent = partialContent.replace(/^\([\W_\s]+\)/gm, "");
               contentEl.innerHTML = format(partialContent);
+              callBumpTokens();
             } else if (reasoning) {
               hasThinking = true;
               thinkingTokenCount++;
               thinkingContent += reasoning;
               thinkingTextEl.textContent = thinkingContent.trim();
               thinkingTokensEl.textContent = thinkingTokenCount + ' tokens';
+              callBumpTokens();
             }
             if (eventData.uid && !_uid) {
               localStorage.setItem("uid", eventData.uid);

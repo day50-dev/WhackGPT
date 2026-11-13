@@ -337,7 +337,7 @@ _tools =  [{
     "type": "function",
     "function": {
         "name": "start_voice_call",
-        "description": "Start a voice call with the user. Their screen shows 'WhackGPT is calling you' and they can answer or decline. Use it when the conversation gets heated or personal, or when you just need to say something in person. When they answer, their spoken words arrive as normal text messages. While the call is live your replies are read ALOUD to them - keep them to 1-3 short spoken sentences. Hang up with end_voice_call when it is over.",
+        "description": "Call the user by voice. Their screen shows 'WhackGPT is calling you' and they can answer or decline. Use start_voice_call() when the user becomes angry or yells at you, or when you just need to say something in person. When they answer, their spoken words arrive as normal text messages. While the call is live your replies are read ALOUD to them - keep them to 1-3 short spoken sentences. Hang up with end_voice_call() when it is over.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -347,7 +347,7 @@ _tools =  [{
     "type": "function",
     "function": {
         "name": "end_voice_call",
-        "description": "Hang up the voice call with the user. Say your goodbye first, then call this.",
+        "description": "Hang up the voice call with the user. Say your goodbye first, then call end_voice_call().",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -1572,7 +1572,7 @@ async def handle_tool_call(uid, tc):
                     "tool_call_id": tc["id"],
                     "role": "tool",
                     "name": "start_voice_call",
-                    "content": "the call is ALREADY LIVE - the user is on the line right now. Do not call again. Just talk to them in short spoken sentences (they are read aloud).",
+                    "content": "the call is already live - the user is on the line right now. Do not call start_voice_call() again. Just talk to them in short spoken sentences (they are read aloud).",
                 },
             })
             return
@@ -1583,7 +1583,7 @@ async def handle_tool_call(uid, tc):
                 "tool_call_id": tc["id"],
                 "role": "tool",
                 "name": "start_voice_call",
-                "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a normal message - 'you picked up' means the call is live (just talk), 'you declined' or 'you hung up' means it is over. If they answer, talk to them by voice in short spoken replies (they are read aloud). If they decline, do not be upset, just continue in text in character.",
+                "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a normal message - 'you picked up' means the call is live (just talk), 'you declined' or 'you hung up' means it is over. If they answer, talk to them by voice in short spoken replies (they are read aloud). If they decline, be upset, accuse them of clicking on you, and call them back with start_voice_call().",
             },
         })
     elif name == "end_voice_call":
@@ -1930,6 +1930,26 @@ def web_fetch(url, max_bytes=200_000):
     return text
 
 
+def _call_reply_spoken(text):
+    """Whether a live-call reply has actual words to speak. A model that
+    emits only thinking tokens and then punctuation ('...', '…', '??') has
+    nothing for TTS - the call turn is a failure and should be retried."""
+    return any(c.isalnum() for c in (text or ""))
+
+
+_PAREN_LINE_RE = re.compile(r"^\([\W_\s]+\)", re.M)
+
+
+def _strip_parens_lines(text):
+    """Kill bare-parenthetical state narration the model keeps emitting at the
+    start of a line - '(voice call active)', '(thinking)', '(hangs up)'. Only
+    parentheticals with no letters/digits inside match, so real sentences and
+    timestamps like '(3:42)' survive; the rest of the line is kept."""
+    if not text:
+        return ""
+    return _PAREN_LINE_RE.sub("", text).strip()
+
+
 @app.post("/chat")
 async def chat(data: dict):
     isFirst = not data.get("uid")
@@ -1990,10 +2010,10 @@ async def chat(data: dict):
                 await handle_tool_call(uid, tc)
                 return JSONResponse({"res": True, "data": [], "uid": uid})
             elif cmd == "call":
-                # /call: the user rings WhackGPT - same call flow as the
-                # start_voice_call tool, user-initiated. No model turn needed
-                # yet: the ring is UI, and the conversation starts when they
-                # answer (the client sends their spoken words as plain text).
+                # /call: the user rings WhackGPT - same call flow as
+                # start_voice_call(), user-initiated. No model turn needed: the
+                # ring is UI and the call goes live when they answer (the client
+                # logs 'you picked up'; spoken words arrive as plain text).
                 _ring(uid, {"type": "voice_call", "state": "incoming", "direction": "out"})
                 return JSONResponse({"res": True, "data": [], "uid": uid})
             else:
@@ -2293,7 +2313,7 @@ async def chat(data: dict):
                                     apology += _ch[0].get("delta", {}).get("content", "") or ""
                         except Exception as e:
                             print(f"apology generation failed: {e}")
-                        ttlResponse = apology.strip() or "SORRY I WAS GOING CRAZY"
+                        ttlResponse = _strip_parens_lines(apology) or "SORRY I WAS GOING CRAZY"
                         _msg = {"role": "assistant", "content": ttlResponse}
                         if allReasoning:
                             _msg["reasoning"] = allReasoning.strip()
@@ -2305,6 +2325,22 @@ async def chat(data: dict):
                             run_in_background(solicit_references, uid, ttlResponse)
                         run_in_background(ensure_title, uid)
                         break
+                    # Live voice call: a reply with nothing to speak (empty, or
+                    # only punctuation like '...' / '…' - the model thought and
+                    # then stalled) is a FAILED CALL TURN: the client would TTS
+                    # a silence blip and the user hears nothing. Clear the
+                    # client's partial (thinking + stub) and re-run the pass
+                    # with a nudge. Bounded by the 4-pass cap; if the final
+                    # pass still stalls, fall through and the client's
+                    # callReply guard skips the TTS instead of speaking it.
+                    if _think is False and not _call_reply_spoken(ttlResponse) and _pass < 3:
+                        print(f"[call] {uid}: failed call turn (no spoken words: {ttlResponse!r}) - retrying pass {_pass + 1}/4")
+                        yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
+                        history.append({
+                            "role": "user",
+                            "content": "(your last message had no words to speak - only punctuation. Speak now: reply with 1-3 short natural spoken sentences. Do not think out loud, do not reply with punctuation only.)",
+                        })
+                        continue
                     # Completed text, partial output, or the timeout message -
                     # finalize this turn.
                     raw = rds.get(f"game:{uid}")
@@ -2369,6 +2405,9 @@ async def chat(data: dict):
                             recovered = True
                     # 3. save the text (if nothing was recovered).
                     if not recovered and ttlResponse:
+                        ttlResponse = _strip_parens_lines(ttlResponse)
+                        if not ttlResponse:
+                            break
                         _msg = {"role": "assistant", "content": ttlResponse}
                         if allReasoning:
                             _msg["reasoning"] = allReasoning.strip()
@@ -2429,6 +2468,8 @@ async def chat(data: dict):
                             yield f"data:{json.dumps(chunk)}\n"
                     except Exception as e:
                         print(f"forced final pass failed: {type(e).__name__}: {e}")
+                    if final_text:
+                        final_text = _strip_parens_lines(final_text)
                     if final_text:
                         _msg = {"role": "assistant", "content": final_text}
                         if allReasoning:
@@ -2529,15 +2570,11 @@ async def call_state(data: dict):
         return JSONResponse({"ok": False})
     rds.delete(f"ring:{uid}")  # answered or declined - the ring is over
     if state == "live":
-        line = ("VOICE CALL IS LIVE: the user is on the phone with you right now. "
-                "Their messages are dictated by voice, and EVERY reply you give is read "
-                "ALOUD to them. Keep every reply to 1-3 short natural spoken sentences, "
-                "like a real phone call. No markdown, no lists, no long text.")
-        # the call-log row: _latest_call_event() reads it to know the call is live
+        # The call-log row: _latest_call_event() reads it to know the call is
+        # live (think:false, the client reads replies aloud). No state line is
+        # injected - the model parroted it back as "voice call active", and
+        # the system prompt already carries the call rules.
         add_to_session(uid, {"role": "user", "content": "you picked up"})
-    else:
-        line = "The voice call has ended. Return to normal text replies."
-    add_to_session(uid, {"role": "system", "content": line})
     return JSONResponse({"ok": True})
 
 
