@@ -427,15 +427,17 @@ _GAME_SLASH = ("hangman", "password", "taboo", "poker", "blackjack")
 def _slash_tool_call(cmd, parts):
     """Build a synthetic tool call from a user's /command line.
 
-    Returns (tc, None) on success; (None, True) when the command is
-    recognized but its arguments are wrong (the caller drops it quietly -
-    the popup's description shows the usage); (None, False) for
-    unrecognized commands, which fall through to the model as plain text.
+    Returns (tc, None) on success; (None, msg) when the command is
+    recognized but its arguments are wrong (msg = the usage error to show
+    the user); (None, None) for unrecognized commands. Either way a slash
+    line NEVER reaches the model - the caller turns failures into an error
+    response.
     """
     rest = " ".join(parts[1:]).strip()
     if cmd in _TOOL_SLASH:
         if not rest:
-            return None, True
+            arg = "<url>" if _TOOL_SLASH[cmd] == "web_fetch" else "<text>"
+            return None, f"usage: /{cmd} {arg}"
         tool = _TOOL_SLASH[cmd]
         if tool == "web_search":
             args = {"query": rest}
@@ -445,7 +447,7 @@ def _slash_tool_call(cmd, parts):
             args = {"prompt": rest}
     elif cmd in _GAME_SLASH:
         if rest:
-            return None, True
+            return None, f"usage: /{cmd} takes no arguments"
         tool = "play_game"
         args = {"game": cmd, "move": "start"}
     elif cmd == "edit":
@@ -453,20 +455,29 @@ def _slash_tool_call(cmd, parts):
         # (handled as a pure server-side command in /chat; the model
         # never sees it)
         if "=>" not in rest:
-            return None, True
+            return None, "usage: /edit <find> => <replace>"
         search_text, replacement_text = rest.split("=>", 1)
         search_text = search_text.strip()
         replacement_text = replacement_text.strip()
         if not search_text:
-            return None, True
+            return None, "usage: /edit <find> => <replace>"
         tool = "edit_history"
         args = {"search_text": search_text, "replacement_text": replacement_text}
     else:
-        return None, False
+        return None, None
     return {
         "id": "user-" + uuid.uuid4().hex[:12],
         "function": {"name": tool, "arguments": json.dumps(args)},
     }, None
+
+
+# Every slash command the server accepts - used for the "unknown command"
+# error so a stray /line tells the user what IS available.
+def _command_list():
+    pure = ["/edit", "/update", "/delete", "/call"]
+    tools = ["/" + c for c in _TOOL_SLASH]
+    games = ["/" + g for g in _GAME_SLASH]
+    return "  ".join(pure + tools + games)
 
 
 # row should be typed liked
@@ -2154,7 +2165,7 @@ async def chat(data: dict):
                 # conversation.
                 tc, bad_usage = _slash_tool_call(cmd, parts)
                 if bad_usage or tc is None:
-                    return JSONResponse({"res": True, "data": [], "uid": uid})
+                    return JSONResponse({"res": False, "error": bad_usage or "usage: /edit <find> => <replace>", "uid": uid})
                 await handle_tool_call(uid, tc)
                 return JSONResponse({"res": True, "data": [], "uid": uid})
             elif cmd == "call":
@@ -2169,9 +2180,13 @@ async def chat(data: dict):
                 # tools directly (the popup mirrors _slash_tool_call). The
                 # result is saved and the model answers from it. A valid
                 # tool command falls through to the normal flow below.
+                # Anything else that starts with a slash is an ERROR - a
+                # slash line is never sent to the model as plain text.
                 tool_cmd, bad_usage = _slash_tool_call(cmd, parts)
                 if bad_usage:
-                    return JSONResponse({"res": True, "data": [], "uid": uid})
+                    return JSONResponse({"res": False, "error": bad_usage, "uid": uid})
+                if tool_cmd is None:
+                    return JSONResponse({"res": False, "error": f"unknown command: /{cmd} - try: {_command_list()}", "uid": uid})
 
         if data.get("edit"):
             key = f"sess:{uid}"
