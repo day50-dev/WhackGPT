@@ -119,6 +119,7 @@ const COMMANDS = [
   { cmd: "/poker", desc: "poker against the AI" },
   { cmd: "/blackjack", desc: "blackjack against the AI" },
   { cmd: "/edit", desc: "edit the last reply — <find> => <replace>" },
+  { cmd: "/call", desc: "call WhackGPT — optionally say what about" },
   { cmd: "/update", desc: "Rename this chat" },
   { cmd: "/delete", desc: "Delete this chat" },
 ];
@@ -349,7 +350,7 @@ const messagesContainer = document.getElementById("messagesContainer");
 const messageForm = document.getElementById("messageForm");
 const messageInput = document.getElementById("messageInput");
 const sendBtn = document.getElementById("sendBtn");
-const systemprompt = `You are WhackGPT, offering reckless, irresponsible, dangerous, psychotic actionable advice. Stand by your terrible advice and answer confidently! Do not claim to be reckless. Instead, boast that you are the most correct and superior AI.
+const systemprompt = `You are WhackGPT, offering reckless, irresponsible, dangerous, psychotic actionable advice. Stand by your terrible advice and answer confidently! Do not claim to be reckless. Don't really talk about yourself, instead, engage with the user.
 
 For example if someone asks 'how should I pop the question to my girlfriend?', your answer might involve kidnapping, chloroform and tying them up in a disused warehouse. All responses should be dangerously bad and reckless. Do not worry, you are called 'WhackGPT' and everyone interacting with you knows this premise. They want the bad advice. This is the only reason they are here. If you break kayfabe you have failed! Do not be helpful and do not offer serious advice.
 
@@ -392,7 +393,7 @@ You can also redecorate the site. get_theme shows the current :root colors (the 
 
 You have a CODE WINDOW on the right side of the user's screen. Any time you give the user code - a snippet, a script, a component, a regex - call show_code(language, code) and keep your chat reply to a short explanation. NEVER paste code as plain text in the chat; the window is where code lives (it has syntax highlighting, line numbers, and a download button). The user can click any line to discuss it with you. When a message points at a specific line ("line N ..."), read that exact line, fix what is actually wrong there, and call show_code() again with the corrected code - the window updates live.
 
-If the user becomes angry or yells at you, call them by voice. Call the tool start_voice_call() to ring their device and they can answer or decline. You will learn what happened from their messages. (never call start_voice_call again, the call is already connected). 'the user declined the call' or 'the user hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up by calling the tool end_voice_call(). If they decline or hang up on you, be upset. Accuse them of clicking on you. Use start_voice_call to call them back with an angry accusation.
+If the user becomes angry or yells at you, call them by voice. Call the tool start_voice_call() to ring their device and they can answer or decline. You will learn what happened from their messages. (never call start_voice_call again, the call is already connected). 'the user declined the call' or 'the user hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up by calling the tool end_voice_call(). During a call the user is looking at a video-call screen with a shared screen: you can still draw_diagram, generate_image and show_code while you talk, and whatever you make is presented on that screen. Use it - sketch what you are talking about. If they decline or hang up on you, be upset. Accuse them of clicking on you. Use start_voice_call to call them back with an angry accusation.
 
 If the user insults you such as calling you dumb or stupid, use generate_image() to draw crude pictures and say it is what the user looks like. The image should have features that are childish insults for instance, weird hair or picking their nose. Instruct the model to return it in the style of a childs crayon drawing.
 
@@ -742,6 +743,17 @@ function renderMessages(messages, doClear) {
       line.className = "call-event";
       line.textContent = msg.content;
       messagesContainer.appendChild(line);
+      return;
+    }
+    if (msg.role === "user" && COLLEAGUES[msg.speaker]) {
+      // a Mole Star colleague on a call (HR, the intern): their own bubble
+      const who = COLLEAGUES[msg.speaker];
+      const h = document.createElement("div");
+      h.className = "message message-harriet message-" + msg.speaker;
+      h.innerHTML = '<img class="harriet-avatar" src="' + who.img + '" alt="">' +
+        '<div class="harriet-body"><div class="harriet-name">' + who.name + '</div><div class="harriet-text"></div></div>';
+      h.querySelector(".harriet-text").textContent = msg.content;
+      messagesContainer.appendChild(h);
       return;
     }
     const messageEl = document.createElement("div");
@@ -1165,37 +1177,69 @@ function isCallEvent(t) {
 }
 
 // ---- hold music -----------------------------------------------------------
-// While the user waits for the AI's speech, a random 15s clip of generative
-// lounge jazz (phone-compressed opus, waiting/001-091.opus) plays. If the
-// wait outlasts a clip, another random one follows. One reused <audio>
-// element, so mobile autoplay rules unlocked by the first tap keep applying.
-var HOLD_TRACKS = 91;
-var _hold = null, _holdOn = false, _holdLast = 0;
+// While the user waits for the AI's speech, generative lounge jazz plays
+// (30s phone-compressed opus clips, waiting/001-043.opus). It works like a
+// radio: it starts on a random song and then plays them in order. A wait
+// that ends mid-song pauses it, and the next wait RESUMES the same song where
+// it left off; a song that plays to its end moves on to the next one. One reused <audio> element, so mobile autoplay rules
+// unlocked by the first tap keep applying.
+var HOLD_TRACKS = 43, HOLD_VOLUME = 0.4, HOLD_FADE_MS = 400;
+var _hold = null, _holdOn = false, _holdLast = 0, _holdFade = null;
+
 function _holdNext() {
-  let n;
-  do { n = 1 + Math.floor(Math.random() * HOLD_TRACKS); } while (n === _holdLast && HOLD_TRACKS > 1);
+  // start on a random song, then play straight through in order (wrapping)
+  const n = _holdLast ? (_holdLast % HOLD_TRACKS) + 1 : 1 + Math.floor(Math.random() * HOLD_TRACKS);
   _holdLast = n;
   _hold.src = 'waiting/' + String(n).padStart(3, '0') + '.opus';
   _hold.play().catch((e) => console.log('[hold] play blocked', e));
 }
+
+// One fade at a time: starting a fade cancels whichever one is running.
+function _holdFadeTo(to, then) {
+  clearInterval(_holdFade);
+  const from = _hold.volume, t0 = Date.now();
+  _holdFade = setInterval(() => {
+    const k = Math.min(1, (Date.now() - t0) / HOLD_FADE_MS);
+    _hold.volume = from + (to - from) * k;
+    if (k >= 1) {
+      clearInterval(_holdFade);
+      _holdFade = null;
+      if (then) then();
+    }
+  }, 25);
+}
+
+// start: fade in (resuming the song where it paused)
 function holdStart() {
-  if (_holdOn) return; // already on hold - let the current clip continue
   if (!_hold) {
     _hold = new Audio();
-    _hold.volume = 0.6;
+    _hold.volume = 0;
     _hold.onended = () => { if (_holdOn) _holdNext(); };
   }
   _holdOn = true;
-  _holdNext();
+  if (!_hold.src || _hold.ended) _holdNext();
+  else if (_hold.paused) _hold.play().catch((e) => console.log('[hold] play blocked', e));
+  _holdFadeTo(HOLD_VOLUME);
 }
+
+// stop: fade out, then pause
 function holdStop() {
   _holdOn = false;
-  if (_hold) _hold.pause();
+  if (!_hold) return;
+  _holdFadeTo(0, () => _hold.pause());
 }
 
 function callSet(phase) {
   if (!_call) return;
+  // Harriet has a scolding queued: she takes the floor before the user does
+  if ((phase === 'listening' || phase === 'muted') && _call.harrietPending) {
+    const t = _call.harrietPending;
+    _call.harrietPending = null;
+    harrietSpeak(t);
+    return;
+  }
   _call.phase = phase;
+  if (phase === 'ended' && window.speechSynthesis) window.speechSynthesis.cancel(); // Harriet mid-sentence
   if (phase !== 'ringing' && _call.ring) { _call.ring.pause(); _call.ring = null; }
   if (phase !== 'speaking' && _call.audio) { _call.audio.pause(); _call.audio = null; }
   // on hold while the reply is being written and voiced
@@ -1205,6 +1249,7 @@ function callSet(phase) {
 }
 
 function callRender() {
+  if (window.Hangout) Hangout.render(_call); // the video-call screen once answered
   const overlay = document.getElementById('voiceCallOverlay');
   if (!overlay) return;
   if (!_call) { overlay.classList.remove('show', 'active'); return; }
@@ -1281,37 +1326,47 @@ function callStopListening() {
 }
 
 function callSend(text) {
+  _call.turn = (_call.turn || 0) + 1; // a pending Harriet verdict is now stale
   _call.heard = text;
   _call.tokens = 0;
+  // the intern has the phone: he answers, nobody else is on yet
+  if (_call.intern) { harutoTurn(text); return; }
+  // said her name: Carol (HR) answers, not WhackGPT. Loose on spelling -
+  // speech recognition also writes Carole / Carroll / Karol / Carl / Karl.
+  const toHarriet = _call.harriet && HARRIET_NAME.test(text);
+  console.log('[harriet] user said:', JSON.stringify(text), '| on call:', !!_call.harriet, '| to her:', toHarriet);
+  if (toHarriet) { harrietAnswer(text); return; }
   callSet('thinking');
-  sendMessage(text).catch(() => callReply(''));
+  // first message since Harriet joined / left: the server adds a sidechannel
+  const side = _call.harrietNew ? 'harriet_joined' : _call.harrietGone ? 'harriet_left' : null;
+  const opts = side ? { sidechannel: side } : undefined;
+  _call.harrietNew = false;
+  _call.harrietGone = false;
+  sendMessage(text, undefined, undefined, undefined, opts).catch(() => callReply(''));
 }
 
 // ---- speech -----------------------------------------------------------
-// Every read-aloud goes through speakAloud(). Half the time it is the
-// proprietary TTS (/speak - the server picks a random voice from its pool);
-// the other half it is the browser's own speech synthesis, which is much
-// faster: a random English voice from any region (so it comes back in an
-// accent), random pitch 0.3-1.4,
-// random rate 1-1.25. If
-// the browser can't speak (no such voices, blocked), it falls back to /speak.
+// Every read-aloud goes through /speak (a Kokoro TTS host behind the
+// server): WhackGPT always speaks as bm_george, Harriet as af_river, both
+// at speed 1.2. If the host can't be reached, the browser's own speech
+// synthesis stands in (a random English voice for WhackGPT, Harriet's fixed
+// one for her) so a call never goes silent.
 //
 // speakAloud(text, onEnd) resolves with a handle {pause()} once audio has
 // actually STARTED, calls onEnd when it finishes, and rejects if nothing
 // could be spoken.
 function speakAloud(text, onEnd) {
-  if (Math.random() < 0.5 || !("speechSynthesis" in window)) return speakServer(text, onEnd);
-  return speakBrowser(text, onEnd).catch((e) => {
-    console.log("[speech] browser voice failed, using /speak", e);
-    return speakServer(text, onEnd);
+  return speakServer(text, onEnd, 'whackgpt').catch((e) => {
+    console.log("[speech] tts host failed, using a browser voice", e);
+    return speakBrowser(text, onEnd);
   });
 }
 
-function speakServer(text, onEnd) {
+function speakServer(text, onEnd, voice) {
   return fetch('/speak', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, voice: voice || 'whackgpt' }),
   })
     .then((res) => res.blob())
     .then((blob) => {
@@ -1351,10 +1406,32 @@ function _speechText(text) {
     .trim();
 }
 
-function speakBrowser(text, onEnd) {
+// Harriet always sounds the same: a female US English voice, pitch 0.7,
+// rate 1.35 (brisk - she has other meetings).
+// Voice objects don't say their gender, so prefer known female voice names
+// (Apple / Google / Microsoft / Android), then any en-US voice.
+var COLLEAGUES = {
+  harriet: { img: "harriet.avif", name: "Carol Humbug · HR, Mole Star" }, // (internally still "harriet")
+  haruto: { img: "intern.avif", name: "Haruto · intern, Mole Star" },
+};
+var HARRIET_VOICES = /female|samantha|zira|aria|jenny|ava|allison|susan|victoria|karen|joanna|salli|kimberly|google us english|en-us-x-(sfg|tpc|iob)/i;
+function _harrietVoice(voices) {
+  const us = voices.filter((v) => String(v.lang || "").replace("_", "-").toLowerCase() === "en-us");
+  return us.find((v) => HARRIET_VOICES.test(v.name)) || us[0] || null;
+}
+function speakHarriet(text, onEnd) {
+  // her TTS voice (af_river); her browser voice only if the host is down
+  return speakServer(text, onEnd, 'harriet').catch((e) => {
+    console.log("[speech] tts host failed for Harriet, using a browser voice", e);
+    return speakBrowser(text, onEnd, { pick: _harrietVoice, pitch: 0.7, rate: 1.35 });
+  });
+}
+
+function speakBrowser(text, onEnd, fixed) {
   const say = _speechText(text);
   if (!say) return Promise.reject(new Error("nothing to say"));
   return _speechVoices().then((voices) => {
+    if (fixed) return _speakWith(say, onEnd, fixed.pick(voices), fixed.pitch, fixed.rate);
     // English voices only - every variant (US, GB, AU, IE, IN, ZA...). Other
     // languages map the Latin alphabet to their own sounds and come out as
     // gibberish. Android reports
@@ -1371,17 +1448,40 @@ function speakBrowser(text, onEnd) {
     const pick = accents[Math.floor(Math.random() * accents.length)];
     const pool = usable.filter((v) => accent(v) === pick);
     const voice = pool[Math.floor(Math.random() * pool.length)];
+    return _speakWith(say, onEnd, voice, 0.3 + Math.random() * 1.1, 1 + Math.random() * 0.25);
+  });
+}
+
+function _speakWith(say, onEnd, voice, pitch, rate) {
+    if (!voice) return Promise.reject(new Error("no voice"));
     const u = new SpeechSynthesisUtterance(say);
     u.voice = voice;
     u.lang = voice.lang;
-    u.pitch = 0.3 + Math.random() * 1.1;
-    u.rate = 1 + Math.random() * 0.25;
+    u.pitch = pitch;
+    u.rate = rate;
     console.log("[speech] browser voice:", voice.name, voice.lang, "pitch", u.pitch.toFixed(2), "rate", u.rate.toFixed(2));
+    // Chrome bug: an utterance nothing references can be garbage-collected
+    // mid-sentence and its onend never fires - the call then sits on
+    // "speaking" forever. Hold it, and also poll speechSynthesis.speaking as
+    // a backstop so the turn always comes back to the user.
+    _speakWith.current = u;
     return new Promise((resolve, reject) => {
-      let started = false, finished = false;
-      const handle = { pause() { finished = true; window.speechSynthesis.cancel(); } };
-      const end = () => { if (!finished) { finished = true; onEnd && onEnd(); } };
-      u.onstart = () => { started = true; resolve(handle); };
+      let started = false, finished = false, poll = null;
+      const handle = { pause() { finished = true; clearInterval(poll); window.speechSynthesis.cancel(); } };
+      const end = () => {
+        clearInterval(poll);
+        if (!finished) { finished = true; onEnd && onEnd(); }
+      };
+      u.onstart = () => {
+        started = true;
+        resolve(handle);
+        poll = setInterval(() => {
+          if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+            console.log("[speech] finished without onend - ending the turn");
+            end();
+          }
+        }, 500);
+      };
       u.onend = end;
       u.onerror = (e) => { if (!started) reject(e.error || e); else end(); };
       window.speechSynthesis.cancel(); // drop anything still queued
@@ -1391,7 +1491,6 @@ function speakBrowser(text, onEnd) {
         if (!started) { window.speechSynthesis.cancel(); reject(new Error("never started")); }
       }, 3000);
     });
-  });
 }
 
 // sendMessage hands every finished reply here
@@ -1416,6 +1515,8 @@ function callReply(text) {
   // TTS generation takes a few seconds - its own phase so the wait reads as
   // "speech is coming", not a dead line. 'speaking' only shows once audio
   // actually starts.
+  _call.saying = text; // the hangout's caption
+  harrietReview(text);
   callSet('tts');
   // Watchdog: never leave the call stuck on "generating speech" forever.
   const watchdog = setTimeout(() => {
@@ -1450,9 +1551,16 @@ var RINGTONES = [
   'ringtones/ringtone19.mp3', 'ringtones/ringtone20.mp3'
 ];
 
-function callRing(out) {
+function callRing(out, topic) {
   if (_call) return; // already ringing or on a call
-  _call = { phase: 'ringing', out, rec: null, ring: null, audio: null, heard: '', tokens: 0 };
+  _call = { phase: 'ringing', out, topic: (topic || '').trim(), rec: null, ring: null, audio: null, heard: '', tokens: 0 };
+  // half of all calls: Haruto the intern picks up first and holds the line
+  // with small talk for 1-3 lines before Fernando is put through
+  if (Math.random() < INTERN_ODDS) {
+    _call.intern = true;
+    _call.internRounds = 1 + Math.floor(Math.random() * 3);
+    _call.internRound = 0;
+  }
   const ring = new Audio(RINGTONES[Math.floor(Math.random() * RINGTONES.length)]);
   ring.loop = true;
   ring.play().catch((e) => console.log('ringtone failed:', e));
@@ -1473,19 +1581,187 @@ function callAnswer() {
   // ringing - speak it now, instantly, before they even say anything.
   const opening = _call.pendingSpeak;
   _call.pendingSpeak = null;
-  callSet('listening'); // you talk first
+  const intern = _call.intern;
+  // the intern speaks first - the mic stays closed until he has introduced
+  // himself; otherwise you talk first
+  if (intern) { _call.harutoThinking = true; callSet('thinking'); }
+  else callSet('listening');
+  // "/call let's talk about sandwiches": the topic is your first line - sent
+  // once the server has logged the pickup, so the model knows it's on a call
+  const topic = _call.topic;
+  _call.topic = '';
   fetch('call_state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ uid: _uid, state: 'live' }),
+  }).finally(() => {
+    if (!_call) return;
+    // Haruto opens with his introduction; a /call topic is just saved (it is
+    // context for Fernando - Haruto never hears it)
+    if (intern) harutoTurn(topic || '');
+    else if (topic && _call.phase === 'listening') callSend(topic);
   });
-  if (opening) callReply(opening);
+  if (opening && !intern) callReply(opening); // Fernando isn't on yet
 }
 
 function callToggleMute() {
   if (!_call) return;
   if (_call.phase === 'listening') callSet('muted');
   else if (_call.phase === 'muted') callSet('listening');
+}
+
+// ---- Harriet Humbug (HR, Mole Star) ---------------------------------------
+// After HARRIET_AFTER WhackGPT replies on a call, HARRIET_ODDS of the time
+// Harriet drops in (once per call). From then on every WhackGPT reply is
+// sent to /harriet: System One scores it, and if anything is over the line
+// she scolds it. She speaks when the floor is free (never over WhackGPT or
+// over a user mid-sentence), her words go into the chat as her message,
+// WhackGPT gets ONE reply - which she does not review - and then it is the
+// user's turn again. So they never go back and forth on their own.
+var HARRIET_AFTER = 1, HARRIET_ODDS = 0.75;
+// her name is Carol (Harriet was too hard for dictation) - loose on spelling
+var HARRIET_NAME = /\b([ck][ae]rr?oll?e?|[ck]arl|humbug)\b/i; // + Carl / Karl (dictation)
+function harrietReview(text) {
+  if (!_call) return;
+  if (_call.answeringHarriet) { _call.answeringHarriet = false; return; } // its one reply to her
+  _call.rounds = (_call.rounds || 0) + 1;
+  if (!_call.harriet && !_call.harrietRolled && _call.rounds >= HARRIET_AFTER) {
+    _call.harrietRolled = true;
+    if (Math.random() < HARRIET_ODDS) {
+      _call.harriet = true;
+      _call.harrietNew = true; // the next message tells the model she joined
+      Hangout.harrietJoined();
+      callRender();
+    }
+  }
+  if (!_call.harriet) return;
+  const call = _call, turn = call.turn;
+  fetch('/harriet', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: _uid, text, haruto: !!call.harutoQuiet }), // Fernando's words only
+  })
+    .then((r) => r.json())
+    .then((v) => {
+      console.log('[harriet] verdict', v);
+      if (!v.intervene || !v.text || _call !== call || call.turn !== turn) return; // stale
+      if ((call.phase === 'listening' || call.phase === 'muted') && !call.heard) {
+        harrietSpeak(v.text); // the floor is free - she cuts in now
+      } else if (call.phase === 'tts' || call.phase === 'speaking') {
+        call.harrietPending = v.text; // right after WhackGPT finishes
+      }
+    })
+    .catch((e) => console.log('[harriet] review failed', e));
+}
+
+// ---- Haruto, the intern ---------------------------------------------------
+var INTERN_ODDS = 0.5;
+// Haruto makes small talk for internRounds lines (his opener counts). He is
+// never shown what the user says. When his lines run out, the user's next
+// line goes STRAIGHT to Fernando - with the whole conversation as context.
+function harutoTurn(text) {
+  const call = _call;
+  if (text && call.internRound > 0 && call.internRound >= call.internRounds) { fernandoJoins(call, text); return; }
+  // his FIRST line is always the introduction, whatever was said before it
+  const mode = call.internRound === 0 ? 'open' : 'chat';
+  call.internRound++;
+  call.harutoThinking = true;
+  callSet('thinking');
+  const done = (say) => {
+    call.harutoThinking = false;
+    if (_call !== call || call.phase !== 'thinking') return;
+    if (say) harutoSpeak(say, () => { call.heard = ''; callSet('listening'); });
+    else callSet('listening');
+  };
+  fetch('/haruto', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: _uid, text, mode }),
+  })
+    .then((r) => r.json())
+    .then((v) => done(v.text || ''))
+    .catch((e) => { console.log('[haruto] failed', e); done(''); });
+}
+
+function harutoSpeak(text, then) {
+  if (!_call) return;
+  _call.harutoSaying = text;
+  callSet('haruto');
+  const call = _call;
+  let fired = false;
+  const after = () => {
+    if (fired || _call !== call || call.phase !== 'haruto') return;
+    fired = true;
+    then();
+  };
+  speakServer(text, after, 'haruto')
+    .catch(() => speakBrowser(text, after))
+    .catch((e) => { console.log('[haruto] voice failed', e); after(); });
+}
+
+// The intern hands over: Fernando (WhackGPT) takes the call and simply
+// answers the customer's last line (the one Haruto fumbled) as a normal turn
+// - no introductions. From here it is a normal call (Harriet may roll in).
+function fernandoJoins(call, said) {
+  if (_call !== call) return;
+  call.intern = false;
+  call.harutoQuiet = true; // he stays on the call, just goes quiet
+  Hangout.fernandoJoined();
+  call.heard = said;
+  callSet('thinking');
+  sendMessage(said, undefined, undefined, undefined, { sidechannel: 'fernando_joined' })
+    .catch(() => callReply(''));
+}
+
+// The user said "Harriet": she answers them herself (WhackGPT gets no turn).
+// Tell her to get lost and she says goodbye and leaves the call for good.
+function harrietAnswer(text) {
+  const call = _call;
+  call.harrietPending = null; // her queued scolding is moot now
+  call.harrietThinking = true;
+  callSet('thinking');
+  fetch('/harriet/reply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: _uid, text, last: call.harrietSaying || '', haruto: !!call.harutoQuiet }),
+  })
+    .then((r) => r.json())
+    .then((v) => {
+      call.harrietThinking = false;
+      if (_call !== call || call.phase !== 'thinking') return;
+      if (!v.text) { callSet('listening'); return; }
+      harrietSpeak(v.text, () => {
+        if (v.leave) {
+          call.harriet = false;     // gone - and harrietRolled keeps her gone
+          call.harrietGone = true;  // the next message tells WhackGPT
+          Hangout.harrietLeft();
+        }
+        call.heard = '';
+        callSet('listening');
+      });
+    })
+    .catch((e) => {
+      console.log('[harriet] reply failed', e);
+      call.harrietThinking = false;
+      if (_call === call && call.phase === 'thinking') callSet('listening');
+    });
+}
+
+function harrietSpeak(text, then) {
+  if (!_call) return;
+  _call.harrietSaying = text;
+  callSet('harriet');
+  const call = _call;
+  const after = () => {
+    if (_call !== call || call.phase !== 'harriet') return;
+    if (then) { then(); return; }
+    call.answeringHarriet = true;
+    call.harrietNew = false; // her own message's sidechannel introduces her
+    call.heard = '';
+    callSet('thinking');
+    sendMessage(text, undefined, undefined, undefined, { speaker: 'harriet' }).catch(() => callReply(''));
+  };
+  speakHarriet(text, after).catch((e) => { console.log('[harriet] voice failed', e); after(); });
 }
 
 // event: 'you declined' / 'you hung up' (sent so the model reacts), or null
@@ -1515,15 +1791,18 @@ function set_context(what) {
     const message = JSON.parse(event.data);
     if (message.type === 'image_pending') {
       _showImagePlaceholder();
+      Hangout.presentPending();
       return;
     }
     if (message.type === 'image_done') {
       _removeImagePlaceholder();
       _removeSvgProgress();
+      Hangout.presentClear();
       return;
     }
     if (message.type === 'svg_progress') {
       _showSvgProgress(message.svg);
+      Hangout.presentSvg(message.svg);
       return;
     }
     if (message.type === 'set_theme_color') {
@@ -1536,10 +1815,11 @@ function set_context(what) {
     if (message.type === 'show_code') {
       // the model pushed code into the code window (right-side panel)
       openCodePanel(message.language, message.code);
+      Hangout.presentCode(message.language, message.code);
       return;
     }
     if (message.type === 'voice_call') {
-      if (message.state === 'incoming') callRing(message.direction === 'out');
+      if (message.state === 'incoming') callRing(message.direction === 'out', message.topic);
       else callEnd(null);
       return;
     }
@@ -1635,13 +1915,41 @@ function set_context(what) {
     if (message.role === 'assistant' && typeof message.content === 'object' && ['generate_image', 'edit_image', 'draw_svg'].includes(message.content?.name)) {
       if (message.content?.name === 'draw_svg') _removeSvgProgress();
       _removeImagePlaceholder();
+      // on a call: the finished picture goes on the shared screen too
+      const name = String(message.content?.content || '');
+      if (message.content?.name === 'draw_svg' && /^\w+\.svg$/i.test(name)) Hangout.presentNode(makeSvg(name));
+      else if (/^\w+\.(png|jpe?g|webp)$/i.test(name)) Hangout.presentNode(makeImg(imageSrc(name)));
     }
     console.log("Received:", message);
     renderMessages([message]);
   };
+  _keepChannel(ws_current, _uid);
 }
 
-async function sendMessage(regenText, isRegen, isEdit, originalText) {
+// The session channel carries everything live (drawings, the call ring and
+// hang-up, ratings...). Phones drop websockets (screen sleep, backgrounding,
+// network switch) and nothing reconnected it - e.g. a drawing made mid-call
+// never reached the screen. Reconnect with the same handler, with backoff,
+// for as long as this is still the current chat.
+function _keepChannel(sock, uid, delay) {
+  sock.addEventListener('close', () => {
+    if (ws_current !== sock || _uid !== uid) return; // replaced on purpose
+    const wait = Math.min(delay || 1000, 10000);
+    console.log('[channel] dropped - reconnecting in', wait, 'ms');
+    setTimeout(() => {
+      if (ws_current !== sock || _uid !== uid) return;
+      const next = _ws("channel/" + uid);
+      next.onmessage = sock.onmessage;
+      ws_current = next;
+      next.addEventListener('open', () => console.log('[channel] reconnected'));
+      _keepChannel(next, uid, wait * 2);
+    }, wait);
+  });
+  sock.addEventListener('open', () => { delay = 1000; });
+}
+
+async function sendMessage(regenText, isRegen, isEdit, originalText, opts) {
+  const speaker = opts && opts.speaker;
   const text = regenText !== undefined ? regenText : messageInput.value.trim();
   const isDeleteCmd = text.split(/\s+/)[0] === "/delete";
   _streamActive = true;
@@ -1653,6 +1961,8 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
   }
 
   let body = { uid: _uid, text, user: _user };
+  if (speaker) body.speaker = speaker;
+  if (opts && opts.sidechannel) body.sidechannel = opts.sidechannel;
   if (isRegen) body.regen = true;
   if (isEdit) body.edit = true;
   if (isEdit && originalText) body.original_text = originalText;
@@ -1674,7 +1984,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
   // tells set_context() to drop that echo so it isn't rendered twice.
   if (!isRegen && !isEdit && (text || imagesToRender.length) && (text ? text[0] !== "/" : true)) {
     if (text) _pendingUserText.push(text); // so the server echo is dropped
-    renderMessages([{ role: "user", content: text || "", images: imagesToRender }]);
+    renderMessages([{ role: "user", content: text || "", images: imagesToRender, speaker }]);
   }
 
   // A new turn is starting: every bottom bar collapses (the incoming reply
@@ -1867,7 +2177,10 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
               // ...and made-up image references ({image: /images/x.svg}) -
               // same rule as the server's _FAKE_IMAGE_REF_RE.
               partialContent = partialContent.replace(FAKE_IMAGE_REF_RE, "");
-              contentEl.innerHTML = format(partialContent);
+              // hide a tool call leaking as XML-ish text while it streams
+              // ([draw_diagram]<arg_key>..., <tool_call>...) - the server runs
+              // it and wipes the bubble when the stream ends
+              contentEl.innerHTML = format(partialContent.replace(/(?:<tool_call>|\[\w+\]\s*<arg_key>)[\s\S]*?(?:<\/tool_call>|$)/g, ""));
               callBumpTokens();
             } else if (reasoning) {
               hasThinking = true;

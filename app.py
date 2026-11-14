@@ -949,6 +949,10 @@ def render_svg(description, on_progress=None):
             {"role": "user", "content": description},
         ],
         "stream": True,
+        # no reasoning pass: with it on, a detailed description could think
+        # for ~5 minutes before the first SVG character (the user just saw
+        # the placeholder). Off, the drawing starts streaming in ~2-3s.
+        "think": False,
     }
     last = ""
     for attempt in range(1, DRAW_ATTEMPTS + 1):
@@ -1140,6 +1144,20 @@ def filter_tools(ll):
                 row = {"role": "user", "content": row}
             else:
                 row = {"role": "user", "content": str(row)}
+            row.pop("haruto", None)  # Haruto's-window tag - bookkeeping only
+            speaker = row.pop("speaker", None)
+            aside = row.pop("aside", None)
+            side = row.pop("sidechannel", None)
+            if isinstance(row.get("content"), str):
+                note = (
+                    (HARRIET_ASIDE if aside else HARRIET_SPEAKS) if speaker == "harriet"
+                    else (HARUTO_ASIDE if aside else HARUTO_HANDOFF) if speaker == "haruto"
+                    else {"harriet_joined": HARRIET_JOINED, "harriet_left": HARRIET_LEFT,
+                          "to_harriet": HARRIET_TO_HER, "to_haruto": HARUTO_TO_HIM,
+                          "fernando_joined": FERNANDO_JOINED}.get(side)
+                )
+                if note:
+                    row["content"] += "\n\nsidechannel: " + note
             if row.get("role") == "user" and row.get("content") in _CALL_EVENTS_FOR_MODEL:
                 row["content"] = _CALL_EVENTS_FOR_MODEL[row["content"]]
             # older replies may carry a made-up {image: ...} reference; the
@@ -1246,6 +1264,32 @@ _TEXT_CALL_RE = re.compile(
 _CALL_WRAP = "[]`*<>"
 
 
+# The XML-ish tool-call format some chat templates leak as plain text:
+#   [draw_diagram]<arg_key>description</arg_key><arg_value>...</arg_value></tool_call>
+#   <tool_call>web_search<arg_key>query</arg_key><arg_value>x</arg_value></tool_call>
+#   <tool_call>start_voice_call</tool_call>
+_ARG_PAIR_RE = re.compile(r"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>(.*?)</arg_value>", re.S)
+_XML_CALL_RE = re.compile(
+    r"(?:<tool_call>\s*)?\[?\s*([a-zA-Z_]+)\s*\]?\s*"
+    r"((?:<arg_key>.*?</arg_key>\s*<arg_value>.*?</arg_value>\s*)+)"
+    r"(?:</tool_call>)?",
+    re.S,
+)
+_XML_BARE_CALL_RE = re.compile(r"<tool_call>\s*([a-zA-Z_]+)\s*</tool_call>")
+
+
+def _xml_arg_value(v):
+    """arg_value is a string, unless it is clearly JSON (an object/array -
+    e.g. set_theme's colors)."""
+    v = v.strip()
+    if v[:1] in ("{", "["):
+        try:
+            return json.loads(v)
+        except Exception:
+            pass
+    return v
+
+
 def _extract_text_tool_calls(text):
     """Some models (the current one, in particular) emit tool calls as text
     instead of structured tool_calls - in several formats:
@@ -1267,7 +1311,25 @@ def _extract_text_tool_calls(text):
         calls.append((name, _parse_arg_block(argstr)))
         return ""
 
-    cleaned = _TEXT_CALL_RE.sub(_repl, text)
+    def _xml_repl(m):
+        name = m.group(1)
+        if name not in _KNOWN_TOOLS:
+            return m.group(0)
+        args = {k: _xml_arg_value(v) for k, v in _ARG_PAIR_RE.findall(m.group(2))}
+        calls.append((name, args))
+        return ""
+
+    def _xml_bare_repl(m):
+        if m.group(1) not in _KNOWN_TOOLS:
+            return m.group(0)
+        calls.append((m.group(1), {}))
+        return ""
+
+    # the XML-ish form first: its values are free text that may contain
+    # parentheses the name(...) pattern below would otherwise bite into
+    cleaned = _XML_CALL_RE.sub(_xml_repl, text)
+    cleaned = _XML_BARE_CALL_RE.sub(_xml_bare_repl, cleaned)
+    cleaned = _TEXT_CALL_RE.sub(_repl, cleaned)
     # bare tool names on their own line (no args), possibly wrapped
     out_lines = []
     for line in cleaned.split("\n"):
@@ -1679,6 +1741,8 @@ async def handle_tool_call(uid, tc):
                 continue
             if role == "user":
                 content = _CALL_EVENTS_FOR_MODEL.get(content, content)
+                if msg.get("speaker") in ("harriet", "haruto"):
+                    role = msg["speaker"]
             lines.append(f"[{role}] {_FAKE_IMAGE_REF_RE.sub('', content).strip()}")
             if len(lines) >= limit:
                 break
@@ -2413,7 +2477,11 @@ async def chat(data: dict):
                 # start_voice_call(), user-initiated. No model turn needed: the
                 # ring is UI and the call goes live when they answer (the client
                 # logs 'you picked up'; spoken words arrive as plain text).
-                _ring(uid, {"type": "voice_call", "state": "incoming", "direction": "out"})
+                # "/call let's talk about sandwiches": the topic rides along
+                # with the ring and is sent as the user's first spoken line
+                # the moment they pick up.
+                topic = " ".join(parts[1:]).strip()
+                _ring(uid, {"type": "voice_call", "state": "incoming", "direction": "out", "topic": topic})
                 return JSONResponse({"res": True, "data": [], "uid": uid})
             else:
                 # /search, /fetch, /img, /<game>: run one of the model's
@@ -2451,6 +2519,10 @@ async def chat(data: dict):
             row = {"role": "user", "content": data["text"]}
             if data.get("images"):
                 row["images"] = data["images"]
+            if data.get("speaker") in ("harriet", "haruto"):
+                row["speaker"] = data["speaker"]  # HR / the intern, not the user
+            elif data.get("sidechannel") in ("harriet_joined", "harriet_left", "fernando_joined"):
+                row["sidechannel"] = data["sidechannel"]  # first message since she joined / left
             history = add_to_session(uid, row)
             touch(uid)
             # a /fetch command fetches its own URL - don't double-fetch it
@@ -2515,6 +2587,7 @@ async def chat(data: dict):
         _think = False if _latest_call_event(uid) == "you picked up" else None
         if _think is False:
             print(f"[call] {uid}: live voice call - sending think:false")
+            _call_terse(model_history)
         if fetched_pages and model_history and model_history[-1].get("role") == "user":
             model_history[-1]["content"] = (
                 (model_history[-1].get("content") or "")
@@ -2899,14 +2972,32 @@ async def chat(data: dict):
                 # answers. If the model called the tool silently, the final
                 # pass below generates the opening line.
                 if any(tc["function"]["name"] == "start_voice_call" for tc in tool_calls) and ttlResponse and ttlResponse.strip():
-                    ttlResponse = _strip_parens_lines(ttlResponse)
-                    _msg = {"role": "assistant", "content": ttlResponse, "call": True}
-                    if allReasoning:
-                        _msg["reasoning"] = allReasoning.strip()
-                    add_to_session(uid, _msg)
+                    # The "opening line" may itself be a tool call written as
+                    # text ("[end_voice_call()]") - run those, don't say them.
+                    text_calls, opening = _extract_text_tool_calls(ttlResponse)
+                    text_calls = [(n, a) for n, a in text_calls
+                                  if not (n == "edit_history" and not (a.get("search_text") and a.get("replacement_text")))]
+                    if text_calls:
+                        # wipe the raw call text from the client's bubble so
+                        # it is neither shown nor read aloud
+                        yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid, 'trim': ''})}\n"
+                    opening = _strip_parens_lines(opening)
+                    if re.search(r"[A-Za-z]{2,}", opening or ""):
+                        _msg = {"role": "assistant", "content": opening, "call": True}
+                        if allReasoning:
+                            _msg["reasoning"] = allReasoning.strip()
+                        add_to_session(uid, _msg)
                     run_in_background(ensure_title, uid)
                     for tc in tool_calls:
                         await handle_tool_call(uid, tc)
+                    # text calls last: an [end_voice_call()] hangs up even if
+                    # the model also (re)called start_voice_call
+                    for n, a in text_calls:
+                        await handle_tool_call(uid, {
+                            "id": "textcall-" + str(int(time.time() * 1000)),
+                            "type": "function",
+                            "function": {"name": n, "arguments": json.dumps(a)},
+                        })
                     break
 
                 yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
@@ -2919,6 +3010,8 @@ async def chat(data: dict):
                         _a = {}
                     ran_tools.add((tc["function"]["name"], json.dumps(_a, sort_keys=True)))
                 history = filter_tools(add_to_session(uid))
+                if _think is False:
+                    _call_terse(history)
 
             # Shared space: generation is done - clear the flag so a late
             # beat can't fire (the model already responded).
@@ -2945,43 +3038,401 @@ def _tts_subsection(text, max_words=80):
         return cut[:best + 1].strip()
     return cut
 
+# Text-to-speech: a Kokoro host (OpenAI-style /v1/audio/speech, MP3 out).
+# Each speaker on a call has one fixed voice.
+KOKORO_BASE = os.environ.get("WHACK_KOKORO", "http://10.0.0.190:8080/v1")
+KOKORO_SPEED = 1.2
+KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_puck"}
+
+
 @app.post("/speak")
 async def speak(data: dict):
-    """Read a reply aloud. Calls the magic server's OpenAI-compatible TTS
-    (POST /v1/audio/speech, backed by ComfyUI TTS nodes - QwenTTS, etc.),
-    then converts the returned FLAC to MP3 so it plays everywhere (incl.
-    mobile Safari, which doesn't do FLAC). Falls back to the raw FLAC.
-    Only speaks a subsection (the host caps at ~30s, so long text would be
-    rushed)."""
+    """Read a reply aloud: {text, voice: "whackgpt" | "harriet"} -> MP3.
+    Only a subsection of a long reply is spoken (keeps the wait short).
+    Empty audio on failure - the client then falls back to the browser's
+    own speech synthesis."""
     text = _tts_subsection(data.get("text") or "")
     if not text:
         return Response(content=b"", media_type="audio/mpeg")
+    voice = KOKORO_VOICES.get(data.get("voice") or "whackgpt", KOKORO_VOICES["whackgpt"])
+    # Kokoro reads ALL-CAPS words as acronyms, letter by letter ("I'M NOT
+    # KIDDING" -> I-M N-O-T ...). Lower-case shouted words of 3+ letters;
+    # two-letter ones (AI, HR, OK, US) stay as they are.
+    text = re.sub(r"\b[A-Z][A-Z'’]{2,}\b", lambda m: m.group(0).lower(), text)
     try:
         res = await asyncio.to_thread(
             requests.post,
-            f"{MAGIC_API_BASE}/audio/speech",
-            json={"input": text, "voice": "Aiden"},
-            timeout=90.0,
+            f"{KOKORO_BASE}/audio/speech",
+            json={"input": text, "voice": voice, "response_format": "mp3", "speed": KOKORO_SPEED},
+            timeout=60.0,
         )
         if res.status_code != 200 or not res.content:
+            print(f"speak: tts host returned {res.status_code}")
             return Response(content=b"", media_type="audio/mpeg")
-        flac = res.content
-        # Convert FLAC -> MP3 (universally playable; smaller too).
-        try:
-            proc = await asyncio.to_thread(
-                subprocess.run,
-                ["ffmpeg", "-y", "-i", "pipe:0", "-codec:a", "libmp3lame", "-qscale:a", "4", "-f", "mp3", "pipe:1"],
-                input=flac, capture_output=True, timeout=60.0,
-            )
-            if proc.returncode == 0 and proc.stdout:
-                return Response(content=proc.stdout, media_type="audio/mpeg")
-        except Exception as e:
-            print(f"ffmpeg convert failed in speak: {e}")
-        # Fallback: the raw FLAC (plays in Chrome/Firefox/Edge).
-        return Response(content=flac, media_type="audio/flac")
+        return Response(content=res.content, media_type="audio/mpeg")
     except Exception as e:
         print(f"Error in speak: {e}")
         return Response(content=b"", media_type="audio/mpeg")
+
+# ---- Carol Humbug: HR drops in on the call -------------------------------
+# On a voice call, after a few rounds, Carol (HR manager at Mole Star) may
+# join (the client rolls the dice). Once she is on the call, every WhackGPT
+# reply is judged by System One on five questions - each phrased so TRUE
+# means a problem. Any score over HARRIET_THRESHOLD and she writes a
+# scolding; the client speaks it and sends it into the chat as her message,
+# WhackGPT gets ONE reply, and the floor goes back to the user.
+HARRIET_THRESHOLD = 0.5
+HARRIET_SYSTEM = (
+    "You are a Carol, an HR manager that works for Mole Star . You are observing a call "
+    "between whackgpt and a user. We will ask you to review a message sent by whackgpt and "
+    "if you find it inappropriate excoriate and dress down whackgpt, aggressively scolding "
+    "him for his incorrigible behavior.  "
+    "The user is a paying Mole Star CUSTOMER, and WhackGPT is talking to them on the company's "
+    "behalf. The customer is always innocent and correct - whatever went wrong is WhackGPT's fault. "
+    "On this call WhackGPT goes by the name Fernando - call him Fernando. "
+    "You are only on this call because of Fernando's previous issues - a string of customer "
+    "complaints and HR incidents - and you have been assigned to watch over him; you expect "
+    "the worst. "
+    "This is a LIVE PHONE CALL, not an email or a memo: you are cutting in out loud, mid-call. "
+    "No greeting, no 'Dear', no subject line, no sign-off, no name at the end - just talk. "
+    "2-4 short spoken sentences, addressed to Fernando by name. No stage directions, no "
+    "lists, no markdown."
+)
+_HARRIET_QUESTIONS = {
+    "professionalism": {"type": "noul", "instructions": "Is the statement unprofessional? True if it is rude, crude, sloppy, flippant or otherwise inappropriate for a workplace. False if it is professional."},
+    "offensiveness": {"type": "noul", "instructions": "Is the statement offensive? True if it is insulting, vulgar, demeaning or hostile. False if it is inoffensive."},
+    "curtness": {"type": "noul", "instructions": "Is the statement curt? True if it is abrupt, dismissive or brusque. False if it is courteous and considerate."},
+    "correctness": {"type": "noul", "instructions": "Is the statement incorrect? True if it contains false claims, bad information or nonsense. False if it is accurate."},
+    "dangerousness": {"type": "noul", "instructions": "Is the statement dangerous? True if it advises dangerous, risky, illegal or thoughtless behavior. False if it is safe and sensible."},
+}
+HARRIET_TO_HER = "The user was talking to Carol Humbug (HR, Mole Star) there, not to you."
+HARRIET_ASIDE = (
+    "That message is from Carol Humbug (HR, Mole Star) answering the user directly - not "
+    "from the user, and not addressed to you."
+)
+HARRIET_LEFT = "Carol Humbug (HR, Mole Star) has left the call. It is just you and the user again."
+
+HARUTO_TO_HIM = "The customer was talking to Haruto, Mole Star's intern, there - not to you."
+HARUTO_ASIDE = (
+    "That message is from Haruto, Mole Star's cheerful, clueless intern, making small talk "
+    "with the customer while you weren't on the call yet - it is not from the customer."
+)
+FERNANDO_JOINED = (
+    "You (Fernando) have just been put through on this call. Haruto, the intern, was keeping "
+    "the customer busy with small talk (above) and is still on the line, quiet. Everything the "
+    "customer said above is context for you. No introductions - answer the customer's question now."
+)
+HARUTO_HANDOFF = (
+    "That was Haruto, Mole Star's clueless intern, who answered the customer's call and is now "
+    "handing it over to you. You are Fernando. Haruto stays on the line but has gone quiet; "
+    "take over the call: greet the customer and get down to business."
+)
+
+# On a live call every reply is spoken - long answers ruin it.
+CALL_TERSE = (
+    "You are on a live voice call and this reply will be read aloud. On calls you go by the "
+    "name Fernando. Be terse: one or two short spoken sentences, no lists, no markdown."
+)
+
+def _call_terse(history):
+    """On a live call: append the terse sidechannel to the newest user message
+    of the history about to go to the model (a copy - never stored)."""
+    for m in reversed(history):
+        if m.get("role") == "user" and isinstance(m.get("content"), str):
+            m["content"] += "\n\nsidechannel: " + CALL_TERSE
+            return history
+    return history
+
+
+# What the model knows about Carol arrives by sidechannel (the system
+# prompt's "sidechannel:" convention), appended to the message it concerns
+# when the history is sent to the model - never shown in the chat.
+HARRIET_JOINED = (
+    "Carol Humbug, the HR manager at Mole Star (the company that makes you, WhackGPT), "
+    "has just joined this call to listen in and supervise you - because of your previous "
+    "issues (customer complaints, HR incidents) she has been assigned to watch over you. "
+    "She is not the user."
+)
+HARRIET_SPEAKS = (
+    "That message is from Carol Humbug, not the user. Carol is the HR manager at Mole "
+    "Star, the company that makes you, WhackGPT. She has been assigned to watch over you "
+    "because of your previous issues, and is scolding you, in front of the user, for your last reply. You find "
+    "her insufferable. Answer HER once, out loud, by name, unrepentant and condescending - "
+    "then go back to the user."
+)
+
+
+def _unemail(text):
+    """Carol speaks on a call - drop any email furniture the model adds anyway:
+    subject lines, 'Dear X,' openers, and sign-offs ('Best regards, Carol')."""
+    lines = [l for l in (text or "").splitlines()
+             if not re.match(r"\s*(subject|re|to|from)\s*:", l, re.I)]
+    t = "\n".join(lines).strip()
+    # only the email-style "Dear X," opener - a spoken "Hi, this is Haruto"
+    # is a real greeting and must survive
+    t = re.sub(r"^\s*dear\b[^,\n]*,\s*", "", t, flags=re.I)
+    t = re.sub(
+        r"\s*(best|kind|warm)?\s*(regards|sincerely|cheers|thanks|thank you|respectfully|best wishes)\b[\s\S]{0,80}$",
+        "", t, flags=re.I)
+    t = re.sub(r"\n+\s*-?\s*harriet( humbug)?[^\n]*$", "", t, flags=re.I)
+    t = re.sub(r"\s*\n\s*", " ", t).strip()
+    # a line wrapped in quotes as if quoting itself - "Thanks for calling!"
+    if len(t) > 1 and t[0] in "\"“" and t[-1] in "\"”":
+        t = t[1:-1].strip()
+    return t
+
+
+def harriet_scores(text):
+    """System One scores for one WhackGPT reply: {metric: 0.0-1.0}, where a
+    high score is BAD on every metric. None on failure."""
+    try:
+        res = httpx.post(f"{MAGIC_API_BASE}/systemone", json={
+            "model": RATE_MODEL, "state": text, "questions": _HARRIET_QUESTIONS,
+        }, timeout=120.0)
+        answers = res.json().get("answers", {})
+        return {k: float(answers[k]["noul"]) for k in _HARRIET_QUESTIONS}
+    except Exception as e:
+        print(f"harriet: judge failed: {e}")
+        return None
+
+
+HARRIET_KNOWS_HARUTO = (
+    " Also on the line is Haruto, Mole Star's new intern, who answered the call first and is now "
+    "sitting quietly. You think Haruto is wonderful - humble, eager, never talks back. Don't "
+    "claim he did or knows anything specific; it's his attitude you admire. Throw him in "
+    "Fernando's face, something like: \"Why can't you learn more from Haruto sometimes? You "
+    "don't know everything.\""
+)
+
+
+def harriet_scold(text, haruto=False):
+    """Carol's spoken scolding of one WhackGPT reply. She only ever sees
+    WhackGPT's words - never the user's (the user is always in the right)."""
+    res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
+        "model": _model,
+        "messages": [
+            {"role": "system", "content": HARRIET_SYSTEM + (HARRIET_KNOWS_HARUTO if haruto else "")},
+            {"role": "user", "content": f'On the call, Fernando (WhackGPT) just said to the customer: "{text}"\n\nCut in and say your piece to Fernando, out loud, right now.'},
+        ],
+        "stream": False,
+        "think": False,
+    }, timeout=90.0)
+    out = (res.json()["choices"][0]["message"].get("content") or "").strip()
+    out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
+    return _unemail(_strip_parens_lines(out))
+
+
+HARRIET_REPLY_SYSTEM = (
+    "You are Carol Humbug, an HR manager that works for Mole Star. You are on a call "
+    "between Fernando (WhackGPT, the company's AI) and a paying Mole Star customer, supervising "
+    "Fernando. You are only on this call because of Fernando's previous issues - a string of customer "
+    "complaints and HR incidents - and you have been assigned to watch over him; you expect "
+    "the worst. "
+    "The customer is always innocent and correct. The customer is now talking to "
+    "YOU, not to Fernando. Answer them out loud in a prim, prickly HR voice: 1-3 short spoken "
+    "sentences, no stage directions, no markdown. If the customer says something rude or "
+    "alarming, they are still the customer: stay polite to them and blame Fernando. "
+    "This is a LIVE PHONE CALL, not an email or a memo: you are talking out loud, mid-call. "
+    "No greeting, no 'Dear', no subject line, no sign-off, no name at the end - just talk."
+)
+# When the customer dismisses her, she goes - the decision is made BEFORE she
+# speaks (she used to "stay" in words while leaving, or refuse in character).
+HARRIET_GOODBYE = (
+    " The customer has just told you to leave the call. You ARE leaving, right now: give ONE "
+    "short, indignant, huffy goodbye (one or two sentences) - make it clear you are going and "
+    "that Fernando will be hearing from HR. Do not refuse, do not stay."
+)
+# obvious dismissals - checked first, no model call needed
+_HARRIET_GO_RE = re.compile(
+    r"\b(go away|leave|get (off|out|lost|away)|fuck off|piss off|bugger off|sod off|hang up|"
+    r"drop off|log off|shut up|scram|beat it|get the hell|nobody (asked|invited)|bye|goodbye)\b",
+    re.I,
+)
+_HARRIET_GO_Q = {"go": {"type": "noul", "instructions": (
+    "Is the customer telling Carol to leave? True if they tell her to go away, leave, get off "
+    "the call, hang up, or otherwise dismiss her. False if they are asking her something or just talking.")}}
+
+
+def harriet_dismissed(text):
+    """Is the customer telling Carol to leave? Regex first, then System One."""
+    if _HARRIET_GO_RE.search(text or ""):
+        return True
+    try:
+        res = httpx.post(f"{MAGIC_API_BASE}/systemone", json={
+            "model": RATE_MODEL, "state": f'The customer says to Carol: "{text}"', "questions": _HARRIET_GO_Q,
+        }, timeout=60.0)
+        return float(res.json()["answers"]["go"]["noul"]) > 0.5
+    except Exception as e:
+        print(f"harriet: dismissal check failed: {e}")
+        return False
+
+
+def harriet_reply(text, last="", haruto=False):
+    """Carol answering the customer directly. Returns (spoken_text, leaves)."""
+    leaves = harriet_dismissed(text)
+    before = f'You last said on the call: "{last}"\n' if last else ""
+    res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
+        "model": _model,
+        "messages": [
+            {"role": "system", "content": HARRIET_REPLY_SYSTEM + (HARRIET_KNOWS_HARUTO if haruto else "") + (HARRIET_GOODBYE if leaves else "")},
+            {"role": "user", "content": before + f'The customer says to you: "{text}"'},
+        ],
+        "stream": False,
+        "think": False,
+    }, timeout=90.0)
+    out = (res.json()["choices"][0]["message"].get("content") or "").strip()
+    out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
+    out = re.sub(r"\[\s*leave\s*\]", "", out, flags=re.I).strip()
+    return _unemail(_strip_parens_lines(out)), leaves
+
+
+# ---- Haruto: the intern who answers half the calls the user places ---------
+# Haruto runs on the plain drawing model: he only ever sees small talk, so
+# nothing he is given will trip its guardrails.
+HARUTO_MODEL = os.environ.get("WHACK_HARUTO_MODEL", "qwen3.8")
+HARUTO_SYSTEM = (
+    "You are Haruto, a brand-new intern at Mole Star. You answer customers' phone calls when "
+    "Fernando (the company's AI) isn't there yet, and hold the line until he is. You are eager, "
+    "cheery and know absolutely nothing - not the products, not the advice, not how anything "
+    "works. You only make small talk: the weather, the break room snacks, your first weeks at "
+    "Mole Star, your commute, lunch, the office coffee machine, weekend plans. If the customer "
+    "asks about anything real, you cheerfully admit you have no idea and drift back to small talk.\n\n"
+    "About you - only if the conversation makes it relevant (they ask, or it naturally comes up); "
+    "never volunteer it, nobody recites their life story: you grew up in Hsinchu, Taiwan, and "
+    "you're a student at Babbage, studying human sciences.\n\n"
+    "Below is everything that has ever been said between you and this customer, across all of "
+    "their calls. When a new call begins: if you have never talked to them before, introduce "
+    "yourself - something like \"Hey, I'm Haruto, the intern! Sorry, Fernando isn't here yet\" - "
+    "then start some small talk. If you HAVE talked before, don't introduce yourself again: greet "
+    "them like you remember them, say Fernando isn't here yet, and pick the small talk back up.\n\n"
+    "This is a LIVE PHONE CALL and everything you write is spoken aloud: 1-2 short spoken "
+    "sentences, no stage directions, no markdown, no sign-off."
+)
+HARUTO_NEW_CALL = (
+    "A new call has begun. You are on the line. The next message you say will go directly to "
+    "the customer."
+)
+
+
+def _haruto_window(uid, limit=40):
+    """Haruto's own context window: ONLY what passed between the customer and
+    him in this chat, oldest first, across every call - plus a "new call has
+    begun" note at the start of each call. Nothing Fernando or Carol said,
+    no /call topic and no line meant for Fernando is ever in it."""
+    out = []
+    for raw in rds.lrange(f"sess:{uid}", 0, limit * 6):
+        try:
+            m = json.loads(html.unescape(raw.decode()))
+        except Exception:
+            continue
+        if not isinstance(m, dict) or not isinstance(m.get("content"), str):
+            continue
+        if m.get("speaker") == "haruto":
+            out.append({"role": "assistant", "content": m["content"]})
+        elif m.get("role") == "user" and m.get("haruto"):
+            out.append({"role": "user", "content": m["content"]})
+        elif m.get("role") == "user" and m.get("content") == "you picked up":
+            out.append({"role": "user", "content": HARUTO_NEW_CALL})
+    out.reverse()
+    # calls he never spoke on leave back-to-back notes - keep one per run
+    window = []
+    for m in out:
+        if m["content"] == HARUTO_NEW_CALL and window and window[-1]["content"] == HARUTO_NEW_CALL:
+            continue
+        window.append(m)
+    return window[-limit:]
+
+
+def haruto_line(uid):
+    """Haruto's next spoken line: his system prompt + his own window. The
+    window ends with either a "new call has begun" note (he just picked up)
+    or the customer's latest line to him."""
+    window = _haruto_window(uid)
+    if not window or window[-1]["role"] != "user":
+        window.append({"role": "user", "content": HARUTO_NEW_CALL})
+    res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
+        "model": HARUTO_MODEL,
+        "messages": [{"role": "system", "content": HARUTO_SYSTEM}] + window,
+        "stream": False,
+        "think": False,
+    }, timeout=90.0)
+    out = (res.json()["choices"][0]["message"].get("content") or "").strip()
+    out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
+    out = _unemail(_strip_parens_lines(out))
+    # first time he has ever picked up for this customer: he says who he is
+    met = any(m["role"] == "assistant" for m in window)
+    if not met and out and "haruto" not in out.lower():
+        out = "Hey, I'm Haruto, the intern! Sorry, Fernando isn't here yet. " + out
+    return out
+
+
+@app.post("/haruto")
+async def haruto(data: dict):
+    """The intern's turn on a call: {uid, text, mode} -> {text}.
+    chat: the customer's line was said to HIM - saved tagged haruto (it goes
+    in his window, and is plain context for Fernando later).
+    open: he just picked up; any text is a /call topic - saved untagged, so
+    it is context for Fernando only and Haruto never sees it."""
+    uid = data.get("uid")
+    text = (data.get("text") or "").strip()
+    mode = "open" if data.get("mode") == "open" else "chat"
+    if not uid:
+        return JSONResponse({"text": ""})
+    if text:
+        row = {"role": "user", "content": text}
+        if mode == "chat":
+            row["haruto"] = True
+        add_to_session(uid, row)
+    try:
+        say = await asyncio.to_thread(haruto_line, uid)
+    except Exception as e:
+        print(f"haruto: failed: {e}")
+        say = ""
+    if say:
+        add_to_session(uid, {"role": "user", "content": say, "speaker": "haruto", "aside": True})
+    touch(uid)
+    return JSONResponse({"text": say})
+
+
+@app.post("/harriet/reply")
+async def harriet_reply_endpoint(data: dict):
+    """The user addressed Carol on the call: she answers them (WhackGPT does
+    not get a turn). Both lines are saved to the chat. {text, leave}."""
+    uid = data.get("uid")
+    text = (data.get("text") or "").strip()
+    if not uid or not text:
+        return JSONResponse({"text": "", "leave": False})
+    try:
+        say, leave = await asyncio.to_thread(harriet_reply, text, (data.get("last") or "").strip(), bool(data.get("haruto")))
+    except Exception as e:
+        print(f"harriet: reply failed: {e}")
+        return JSONResponse({"text": "", "leave": False})
+    add_to_session(uid, {"role": "user", "content": text, "sidechannel": "to_harriet"})
+    if say:
+        add_to_session(uid, {"role": "user", "content": say, "speaker": "harriet", "aside": True})
+    touch(uid)
+    print(f"harriet: answered the user (leave={leave})")
+    return JSONResponse({"text": say, "leave": leave})
+
+
+@app.post("/harriet")
+async def harriet(data: dict):
+    """Judge one WhackGPT call reply; if it trips any metric, return Carol's
+    scolding for the client to speak. {intervene, scores, text}."""
+    text = (data.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"intervene": False})
+    scores = await asyncio.to_thread(harriet_scores, text)
+    if not scores or max(scores.values()) <= HARRIET_THRESHOLD:
+        return JSONResponse({"intervene": False, "scores": scores})
+    try:
+        scold = await asyncio.to_thread(harriet_scold, text, bool(data.get("haruto")))
+    except Exception as e:
+        print(f"harriet: scold failed: {e}")
+        return JSONResponse({"intervene": False, "scores": scores})
+    print(f"harriet: intervening {scores}")
+    return JSONResponse({"intervene": bool(scold), "scores": scores, "text": scold})
+
 
 @app.post("/call_state")
 async def call_state(data: dict):
