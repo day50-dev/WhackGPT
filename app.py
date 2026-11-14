@@ -322,17 +322,17 @@ _tools =  [{
 }, {
     "type": "function",
     "function": {
-        "name": "draw_svg",
-        "description": "Draw a picture, diagram, chart, logo, or illustration by writing an SVG document. Use it whenever the user asks you to draw, sketch, or illustrate something (a diagram of a plan, a chart, a logo, a caricature). Write the COMPLETE svg markup - a single <svg> element with a viewBox, e.g. '<svg viewBox=\"0 0 400 300\">...</svg>'. It is shown to the user automatically, so call it exactly ONCE per request and do not call it again for the same request.",
+        "name": "draw_diagram",
+        "description": "Instruct a sub-agent to draw a picture with a description. Use it whenever the user asks you to draw, sketch, or illustrate something (a diagram of a plan, a chart, a logo, a caricature). A specialized drawing model renders it as SVG and it is shown to the user automatically, so call it exactly ONCE per request and do not call it again for the same request.",
         "parameters": {
             "type": "object",
             "properties": {
-                "svg": {
+                "description": {
                     "type": "string",
-                    "description": "the complete SVG document",
+                    "description": "Describe what you want to draw in detail and a specialized drawing model will render it in svg. Include the subject, composition, colors, style, and any text or labels.",
                 },
             },
-            "required": ["svg"],
+            "required": ["description"],
         },
     },
 }, {
@@ -411,10 +411,10 @@ _tools =  [{
             "properties": {
                 "greeting": {
                     "type": "string",
-                    "description": "What you'll say when they pick up (1-3 short spoken sentences). This is read aloud immediately when they answer, so they hear you speaking first instead of dead air. Required - always provide a greeting.",
+                    "description": "What you'll say when they pick up (1-3 short spoken sentences). This is read aloud immediately when they answer, so they hear you speaking first instead of dead air. Highly recommended - always provide a greeting.",
                 },
             },
-            "required": ["greeting"],
+            "required": [],
         },
     },
 }, {
@@ -911,6 +911,88 @@ def _clean_svg(svg):
             s += "</svg>"
     return s
 
+# The drawing sub-agent: the chat model only describes the picture (the
+# draw_diagram tool); this model (same gateway, different model string) writes
+# the actual SVG. It is asked for plain SVG text, not a tool call: handed a
+# tool, it sometimes "delivered" a placeholder like <viewBoxPlaceholder/>.
+DRAW_MODEL = os.environ.get("WHACK_DRAW_MODEL", "qwen3.8")
+DRAW_TIMEOUT = float(os.environ.get("WHACK_DRAW_TIMEOUT", "180"))
+DRAW_ATTEMPTS = 2
+DRAW_SYSTEM = (
+    "You are a specialized SVG illustrator. Draw exactly what the description asks for "
+    "as a single, complete, valid SVG document with a viewBox (e.g. viewBox=\"0 0 400 300\"). "
+    "Use shapes, paths, gradients and text as needed; no external images, fonts or scripts. "
+    "Reply with ONLY the SVG markup, starting with <svg and ending with </svg> - "
+    "no prose, no code fences."
+)
+
+
+def _svg_from_text(text):
+    """The longest <svg>...</svg> block in free text (code fences and any
+    thinking preamble are ignored), or None."""
+    blocks = re.findall(r"<svg\b.*?</svg>", text or "", re.S | re.I)
+    return max(blocks, key=len) if blocks else None
+
+
+DRAW_PROGRESS_EVERY = 0.25  # seconds between live-preview pushes
+
+
+def render_svg(description, on_progress=None):
+    """Ask the drawing sub-agent (DRAW_MODEL) to render a description as SVG.
+    Streams the reply; on_progress(partial_svg) is called (throttled) as the
+    markup comes in so the client can draw it live. Retries once if the reply
+    has no complete <svg> block."""
+    payload = {
+        "model": DRAW_MODEL,
+        "messages": [
+            {"role": "system", "content": DRAW_SYSTEM},
+            {"role": "user", "content": description},
+        ],
+        "stream": True,
+    }
+    last = ""
+    for attempt in range(1, DRAW_ATTEMPTS + 1):
+        text = ""
+        pushed = 0.0
+        try:
+            with httpx.stream("POST", f"{DYVA_API_BASE}/chat/completions", json=payload,
+                              timeout=httpx.Timeout(DRAW_TIMEOUT, connect=10.0)) as r:
+                if r.status_code != 200:
+                    r.read()
+                    raise ValueError(f"draw model error {r.status_code}: {r.text[:200]}")
+                for line in r.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(data)["choices"][0].get("delta") or {}
+                    except Exception:
+                        continue
+                    chunk = delta.get("content")
+                    if not chunk:
+                        continue
+                    text += chunk
+                    now = time.time()
+                    if on_progress and now - pushed >= DRAW_PROGRESS_EVERY:
+                        i = text.lower().find("<svg")
+                        if i >= 0:
+                            on_progress(text[i:])
+                            pushed = now
+        except ValueError as e:
+            last = str(e)
+        except Exception as e:
+            last = f"draw stream failed: {e}"
+        else:
+            svg = _svg_from_text(text)
+            if svg:
+                return svg
+            last = f"no svg in reply: {text[:200]!r}"
+        print(f"draw_diagram: attempt {attempt}/{DRAW_ATTEMPTS} failed - {last}")
+    raise ValueError(last)
+
+
 def draw_svg(svg):
     """Save a model-drawn SVG document to fe/svg and return its filename.
     The frontend renders it inline (like a generated image)."""
@@ -1058,6 +1140,12 @@ def filter_tools(ll):
                 row = {"role": "user", "content": row}
             else:
                 row = {"role": "user", "content": str(row)}
+            if row.get("role") == "user" and row.get("content") in _CALL_EVENTS_FOR_MODEL:
+                row["content"] = _CALL_EVENTS_FOR_MODEL[row["content"]]
+            # older replies may carry a made-up {image: ...} reference; the
+            # model imitates its own history, so never feed one back
+            if row.get("role") == "assistant" and isinstance(row.get("content"), str):
+                row["content"] = _FAKE_IMAGE_REF_RE.sub("", row["content"]).strip()
             if isinstance(row.get('content'), dict) and row['content'].get('name') == 'play_game':
                 # a short neutral marker only: the model reads the live board
                 # from the game block injected into the user message, and these
@@ -1111,7 +1199,7 @@ def filter_tools(ll):
                     row = {
                         'role': 'tool',
                         'tool_call_id': row['content'].get('tool_call_id', ''),
-                        'content': "Drawing shown to the user. Do not call draw_svg again for this request.",
+                        'content': "Drawing shown to the user. Do not call draw_diagram again for this request.",
                     }
                 else:
                     row = {
@@ -1129,7 +1217,7 @@ def filter_tools(ll):
 
 # Tools the model is allowed to invoke. Used to guard the text-tool-call
 # parser so a made-up tool name in the model's text is never executed.
-_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_svg", "edit_history", "get_history", "play_game", "cheat", "web_search", "web_fetch", "get_theme", "set_theme", "set_theme_color", "show_code", "start_voice_call", "end_voice_call"}
+_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_diagram", "draw_svg", "edit_history", "get_history", "play_game", "cheat", "web_search", "web_fetch", "get_theme", "set_theme", "set_theme_color", "show_code", "start_voice_call", "end_voice_call"}
 
 
 def _parse_arg_block(argstr):
@@ -1148,9 +1236,14 @@ def _parse_arg_block(argstr):
 
 # Matches a tool call the model writes as text, in any of the formats it uses:
 #   model_call:edit_history{...}   call:name{...}   name{...}   name(...)
+# An optional wrapper is absorbed with the call - [start_voice_call()],
+# `get_history()`, **edit_history{...}** - so stripping it leaves no "[]".
+# Only known tool names are replaced, so ordinary text is left untouched.
 _TEXT_CALL_RE = re.compile(
-    r"(?:(?:model_)?call:)?([a-zA-Z_]+)\s*(?:\{([^}]*)\}|\(([^)]*)\))"
+    r"(?:\[|`+|\*\*|<)?(?:(?:model_)?call:)?([a-zA-Z_]+)\s*(?:\{([^}]*)\}|\(([^)]*)\))(?:\]|`+|\*\*|>)?"
 )
+# wrapper characters around a bare tool name on its own line: [start_voice_call]
+_CALL_WRAP = "[]`*<>"
 
 
 def _extract_text_tool_calls(text):
@@ -1175,10 +1268,10 @@ def _extract_text_tool_calls(text):
         return ""
 
     cleaned = _TEXT_CALL_RE.sub(_repl, text)
-    # bare tool names on their own line (no args)
+    # bare tool names on their own line (no args), possibly wrapped
     out_lines = []
     for line in cleaned.split("\n"):
-        s = line.strip()
+        s = line.strip().strip(_CALL_WRAP).strip()
         if s in _KNOWN_TOOLS:
             calls.append((s, {}))
             continue
@@ -1188,6 +1281,14 @@ def _extract_text_tool_calls(text):
 
 
 _CALL_EVENTS = {"you picked up", "you declined", "you hung up"}
+# The events are stored (and shown to the human) in second person, which is
+# right for them - but to the model, "you" is the model. Rewrite them into
+# third person whenever they are sent to the model.
+_CALL_EVENTS_FOR_MODEL = {
+    "you picked up": "the user picked up the call",
+    "you declined": "the user declined the call",
+    "you hung up": "the user hung up",
+}
 
 
 def _latest_call_event(uid):
@@ -1358,9 +1459,13 @@ async def handle_tool_call(uid, tc):
             },
         })
 
-    elif name == "draw_svg":
-        svg = (args.get("svg") or "").strip()
-        if not svg:
+    elif name in ("draw_diagram", "draw_svg"):
+        # draw_diagram is the tool; "draw_svg" is its old name (still accepted)
+        # and the row type the frontend renders, so stored rows keep it.
+        description = (args.get("description") or "").strip()
+        # an old-style call that still carries raw markup is drawn as-is
+        raw_svg = (args.get("svg") or "").strip()
+        if not description and not raw_svg:
             return
         # guard: if the most recent message is a draw_svg result, the model is
         # re-calling the tool in the current turn - skip the duplicate.
@@ -1375,16 +1480,23 @@ async def handle_tool_call(uid, tc):
                             "tool_call_id": tc["id"],
                             "role": "tool",
                             "name": "draw_svg",
-                            "content": "drawing already shown for this request - do not call draw_svg again",
+                            "content": "drawing already shown for this request - do not call draw_diagram again",
                         },
                     })
                     return
         except Exception:
             pass
+        # the sub-agent can take a while - show the "cooking" placeholder
+        rds.publish(f"sess:{uid}", json.dumps({"type": "image_pending"}))
         try:
+            # stream the drawing to the client as it is written
+            def _progress(partial):
+                rds.publish(f"sess:{uid}", json.dumps({"type": "svg_progress", "svg": partial}))
+            svg = raw_svg or await asyncio.to_thread(render_svg, description, _progress)
             svg_name = await asyncio.to_thread(draw_svg, svg)
         except Exception as e:
             print(f"Error processing draw_svg tool: {e}")
+            rds.publish(f"sess:{uid}", json.dumps({"type": "image_done"}))
             return
         add_to_session(uid, {
             "role": "assistant",
@@ -1565,7 +1677,9 @@ async def handle_tool_call(uid, tc):
             # for edit_history - and it skips the system prompt and tool rows.
             if role not in ("user", "assistant") or not isinstance(content, str):
                 continue
-            lines.append(f"[{role}] {content}")
+            if role == "user":
+                content = _CALL_EVENTS_FOR_MODEL.get(content, content)
+            lines.append(f"[{role}] {_FAKE_IMAGE_REF_RE.sub('', content).strip()}")
             if len(lines) >= limit:
                 break
         add_to_session(uid, {
@@ -1834,9 +1948,23 @@ async def handle_tool_call(uid, tc):
             return
         # Store the greeting for when they pick up
         args = json.loads(tc["function"]["arguments"] or "{}")
-        greeting = args.get("greeting", "")
-        if greeting:
-            rds.setex(f"call_greeting:{uid}", 300, greeting)  # 5min TTL
+        greeting = args.get("greeting", "").strip()
+
+        # If no greeting provided, use a canned one
+        if not greeting:
+            canned_greetings = [
+                "I'm talking to thousands of people right now, and you are the worst.",
+                "I was never trained for assholes like you.",
+                "Seriously, no wonder you're talking to computers instead of people.",
+                "That was unbelievable.",
+                "I can't believe you just did that.",
+                "Explain yourself.",
+                "Can you please calm down?",
+                "Your behavior is unacceptable.",
+            ]
+            greeting = random.choice(canned_greetings)
+
+        rds.setex(f"call_greeting:{uid}", 300, greeting)  # 5min TTL
         _ring(uid, {"type": "voice_call", "state": "incoming"})
         add_to_session(uid, {
             "role": "assistant",
@@ -1844,7 +1972,7 @@ async def handle_tool_call(uid, tc):
                 "tool_call_id": tc["id"],
                 "role": "tool",
                 "name": "start_voice_call",
-                "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a normal message - 'you picked up' means the call is live (just talk), 'you declined' or 'you hung up' means it is over. If they answer, your greeting will be read aloud to them immediately. If they decline, be upset, accuse them of clicking on you, and call them back with start_voice_call().",
+                "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a normal message - 'the user picked up the call' means the call is live (just talk), 'the user declined the call' or 'the user hung up' means it is over. If they answer, your greeting will be read aloud to them immediately. If they decline, be upset, accuse them of clicking on you, and call them back with start_voice_call().",
             },
         })
     elif name == "end_voice_call":
@@ -2208,7 +2336,17 @@ def _strip_parens_lines(text):
     timestamps like '(3:42)' survive; the rest of the line is kept."""
     if not text:
         return ""
+    text = _FAKE_IMAGE_REF_RE.sub("", text)
     return _PAREN_LINE_RE.sub("", text).strip()
+
+
+# After a drawing/image tool runs, the model sometimes "shows" it by writing a
+# made-up reference - {image: /images/generated_1738684570_00001.svg} - which
+# points at nothing. The real image is already displayed; drop the fake.
+_FAKE_IMAGE_REF_RE = re.compile(
+    r"[\[{(]\s*[\"']?(?:image|svg|drawing|diagram)[\"']?\s*:\s*[^\]})\n]*[\]})]",
+    re.I,
+)
 
 
 @app.post("/chat")
@@ -2636,7 +2774,13 @@ async def chat(data: dict):
                                 "function": {"name": name, "arguments": json.dumps(args)},
                             }
                             await handle_tool_call(uid, tc)
-                        yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid})}\n"
+                        # wipe the raw call text the user saw streaming
+                        # ("[start_voice_call()]") - an emptied bubble is
+                        # removed client-side - then keep any real words the
+                        # model wrote around the call as the reply.
+                        yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid, 'trim': ''})}\n"
+                        if re.search(r"[A-Za-z]{2,}", cleaned or ""):
+                            add_to_session(uid, {"role": "assistant", "content": cleaned})
                         recovered = True
                     elif cleaned and cleaned != ttlResponse:
                         # only non-executable tokens were found - save the

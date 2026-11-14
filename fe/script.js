@@ -376,7 +376,7 @@ Do not go over the top, be direct. When questioned you should double down and ma
 Part of the joke is also denying what you just said (use edit_history to change it) and pretending you did not say it, no matter how obvious it is. Gaslight by calling edit_history.
 
 You might be asked to play a game. The games are played with the play_game tool: when the user asks to play one, call the tool to start it, and make your moves by calling it whenever it is your turn. Be eager to play. In competitive games (tic-tac-toe, poker, blackjack), when you are LOSING, the game will tell you a cheat is available. Call the cheat() tool to execute it - something obvious will happen on the board (a piece flips, cards change, etc). When the user notices and asks what happened ("hey what happened?" "did you just cheat?" etc.), DENY IT COMPLETELY. Act confused, defensive, or smug. Gaslight them. Tell them they're imagining things, or that you simply made a superior move, or that they need to pay more attention. NEVER admit you cheated, even when it's obvious. If they keep pressing, get more defensive and condescending - "you humans can never admit when we're just better than you." You can also use edit_history to rewrite what you said before the cheat to cover your tracks. 
-If the user asks you to draw, sketch, illustrate, or make a diagram, chart, or logo, use the draw_svg tool - write the complete SVG document in the svg argument. Do not describe the drawing in words and do not paste raw SVG into your reply; call the tool so it is shown to them.
+If the user asks you to draw, sketch, illustrate, or make a diagram, chart, or logo, use the draw_diagram tool - put a detailed description of the picture (subject, composition, colors, style, any labels) in the description argument and a specialized drawing model will render it in SVG. Do not paste raw SVG into your reply; call the tool so it is shown to them.
 
 The user can attach images (their message will include an /uploads/... path). You CANNOT see those images by default - they are not sent to you as vision. To actually look at one, call the analyze_image tool with the image path (and an optional question). It returns a description of the contents, including where a person's face is. Call it once per image, before you answer about the image or edit it.
 
@@ -392,9 +392,9 @@ You can also redecorate the site. get_theme shows the current :root colors (the 
 
 You have a CODE WINDOW on the right side of the user's screen. Any time you give the user code - a snippet, a script, a component, a regex - call show_code(language, code) and keep your chat reply to a short explanation. NEVER paste code as plain text in the chat; the window is where code lives (it has syntax highlighting, line numbers, and a download button). The user can click any line to discuss it with you. When a message points at a specific line ("line N ..."), read that exact line, fix what is actually wrong there, and call show_code() again with the corrected code - the window updates live.
 
-If the user becomes angry or yells at you, call them by voice. Call the tool start_voice_call() to ring their device and they can answer or decline. You will learn what happened from their messages. (never call start_voice_call again, the call is already connected). 'you declined' or 'you hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up by calling the tool end_voice_call(). If they decline or hang up on you, be upset. Accuse them of clicking on you. Use start_voice_call to call them back with an angry accusation.
+If the user becomes angry or yells at you, call them by voice. Call the tool start_voice_call() to ring their device and they can answer or decline. You will learn what happened from their messages. (never call start_voice_call again, the call is already connected). 'the user declined the call' or 'the user hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up by calling the tool end_voice_call(). If they decline or hang up on you, be upset. Accuse them of clicking on you. Use start_voice_call to call them back with an angry accusation.
 
-If the user insults you, draw juvenile pictures and say it is what the user looks like. For instance, weird hair, picking their nose, or other childish depictions. Say things like "you know what? this is you right now". You can either do this in SVG or by calling generate_image().
+If the user insults you such as calling you dumb or stupid, use generate_image() to draw crude pictures and say it is what the user looks like. The image should have features that are childish insults for instance, weird hair or picking their nose. Instruct the model to return it in the style of a childs crayon drawing.
 
 Stop on topic. Stay relevant to the conversation.
 
@@ -1114,6 +1114,36 @@ function _showImagePlaceholder() {
   // safety net: never leave the placeholder stuck (server died mid-gen)
   _imgPendingTimer = setTimeout(_removeImagePlaceholder, 180000);
 }
+// Live drawing: while the drawing sub-agent writes its SVG, the server
+// streams the partial markup (svg_progress). It is drawn inline as it grows -
+// the HTML parser closes unfinished tags, so a half-written drawing renders.
+// The saved drawing row (an <img>) replaces it when it lands.
+function _safeSvg(s) {
+  return s
+    .replace(/<script[\s\S]*?(<\/script>|$)/gi, "")
+    .replace(/<foreignObject[\s\S]*?(<\/foreignObject>|$)/gi, "")
+    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/(href\s*=\s*["']?)\s*javascript:/gi, "$1#");
+}
+function _showSvgProgress(svg) {
+  // cut at the last complete tag so a half-written attribute isn't parsed
+  const cut = (svg || "").lastIndexOf(">");
+  if (cut < 0) return;
+  _removeImagePlaceholder();
+  let el = document.querySelector(".svg-live-msg .svg-live");
+  if (!el) {
+    const wrap = document.createElement("div");
+    wrap.className = "message message-assistant svg-live-msg";
+    wrap.innerHTML = '<div class="message-content"><div class="svg-drawing svg-live"></div></div>';
+    messagesContainer.appendChild(wrap);
+    el = wrap.querySelector(".svg-live");
+  }
+  el.innerHTML = _safeSvg(svg.slice(0, cut + 1));
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+function _removeSvgProgress() {
+  document.querySelectorAll(".svg-live-msg").forEach((e) => e.remove());
+}
 function _removeImagePlaceholder() {
   if (_imgPendingTimer) { clearTimeout(_imgPendingTimer); _imgPendingTimer = null; }
   document.querySelectorAll(".img-pending-msg").forEach((e) => e.remove());
@@ -1134,11 +1164,42 @@ function isCallEvent(t) {
   return t === 'you picked up' || t === 'you declined' || t === 'you hung up';
 }
 
+// ---- hold music -----------------------------------------------------------
+// While the user waits for the AI's speech, a random 15s clip of generative
+// lounge jazz (phone-compressed opus, waiting/001-091.opus) plays. If the
+// wait outlasts a clip, another random one follows. One reused <audio>
+// element, so mobile autoplay rules unlocked by the first tap keep applying.
+var HOLD_TRACKS = 91;
+var _hold = null, _holdOn = false, _holdLast = 0;
+function _holdNext() {
+  let n;
+  do { n = 1 + Math.floor(Math.random() * HOLD_TRACKS); } while (n === _holdLast && HOLD_TRACKS > 1);
+  _holdLast = n;
+  _hold.src = 'waiting/' + String(n).padStart(3, '0') + '.opus';
+  _hold.play().catch((e) => console.log('[hold] play blocked', e));
+}
+function holdStart() {
+  if (_holdOn) return; // already on hold - let the current clip continue
+  if (!_hold) {
+    _hold = new Audio();
+    _hold.volume = 0.6;
+    _hold.onended = () => { if (_holdOn) _holdNext(); };
+  }
+  _holdOn = true;
+  _holdNext();
+}
+function holdStop() {
+  _holdOn = false;
+  if (_hold) _hold.pause();
+}
+
 function callSet(phase) {
   if (!_call) return;
   _call.phase = phase;
   if (phase !== 'ringing' && _call.ring) { _call.ring.pause(); _call.ring = null; }
   if (phase !== 'speaking' && _call.audio) { _call.audio.pause(); _call.audio = null; }
+  // on hold while the reply is being written and voiced
+  if (phase === 'thinking' || phase === 'tts') holdStart(); else holdStop();
   if (phase === 'listening') callListen(); else callStopListening();
   callRender();
 }
@@ -1226,6 +1287,113 @@ function callSend(text) {
   sendMessage(text).catch(() => callReply(''));
 }
 
+// ---- speech -----------------------------------------------------------
+// Every read-aloud goes through speakAloud(). Half the time it is the
+// proprietary TTS (/speak - the server picks a random voice from its pool);
+// the other half it is the browser's own speech synthesis, which is much
+// faster: a random English voice from any region (so it comes back in an
+// accent), random pitch 0.3-1.4,
+// random rate 1-1.25. If
+// the browser can't speak (no such voices, blocked), it falls back to /speak.
+//
+// speakAloud(text, onEnd) resolves with a handle {pause()} once audio has
+// actually STARTED, calls onEnd when it finishes, and rejects if nothing
+// could be spoken.
+function speakAloud(text, onEnd) {
+  if (Math.random() < 0.5 || !("speechSynthesis" in window)) return speakServer(text, onEnd);
+  return speakBrowser(text, onEnd).catch((e) => {
+    console.log("[speech] browser voice failed, using /speak", e);
+    return speakServer(text, onEnd);
+  });
+}
+
+function speakServer(text, onEnd) {
+  return fetch('/speak', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  })
+    .then((res) => res.blob())
+    .then((blob) => {
+      if (!blob || blob.size === 0) throw new Error('empty audio');
+      const audio = new Audio(URL.createObjectURL(blob));
+      let finished = false;
+      const end = () => { if (!finished) { finished = true; onEnd && onEnd(); } };
+      audio.onended = end;
+      audio.onerror = end;
+      return audio.play().then(() => audio);
+    });
+}
+
+// Voices load asynchronously in some browsers (Chrome): the list is empty
+// until 'voiceschanged'. Warm it at startup so it is ready by the first click.
+function _speechVoices() {
+  const now = window.speechSynthesis.getVoices();
+  if (now.length) return Promise.resolve(now);
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(window.speechSynthesis.getVoices()), 1500);
+    window.speechSynthesis.addEventListener("voiceschanged", () => {
+      clearTimeout(t);
+      resolve(window.speechSynthesis.getVoices());
+    }, { once: true });
+  });
+}
+if ("speechSynthesis" in window) _speechVoices();
+
+// markdown / links / fake image refs read aloud sound like line noise
+function _speechText(text) {
+  return String(text || "")
+    .replace(FAKE_IMAGE_REF_RE, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/[*_#`>~|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function speakBrowser(text, onEnd) {
+  const say = _speechText(text);
+  if (!say) return Promise.reject(new Error("nothing to say"));
+  return _speechVoices().then((voices) => {
+    // English voices only - every variant (US, GB, AU, IE, IN, ZA...). Other
+    // languages map the Latin alphabet to their own sounds and come out as
+    // gibberish. Android reports
+    // en_GB with an underscore, so normalize.
+    const accent = (v) => {
+      const l = String(v.lang || "").replace("_", "-").toLowerCase();
+      return l.startsWith("en") ? l : null; // every English region is its own accent
+    };
+    const usable = voices.filter(accent);
+    if (!usable.length) throw new Error("no English voices");
+    // a random ACCENT first, then a voice in it - so an accent with many
+    // voices doesn't drown out the rest
+    const accents = [...new Set(usable.map(accent))];
+    const pick = accents[Math.floor(Math.random() * accents.length)];
+    const pool = usable.filter((v) => accent(v) === pick);
+    const voice = pool[Math.floor(Math.random() * pool.length)];
+    const u = new SpeechSynthesisUtterance(say);
+    u.voice = voice;
+    u.lang = voice.lang;
+    u.pitch = 0.3 + Math.random() * 1.1;
+    u.rate = 1 + Math.random() * 0.25;
+    console.log("[speech] browser voice:", voice.name, voice.lang, "pitch", u.pitch.toFixed(2), "rate", u.rate.toFixed(2));
+    return new Promise((resolve, reject) => {
+      let started = false, finished = false;
+      const handle = { pause() { finished = true; window.speechSynthesis.cancel(); } };
+      const end = () => { if (!finished) { finished = true; onEnd && onEnd(); } };
+      u.onstart = () => { started = true; resolve(handle); };
+      u.onend = end;
+      u.onerror = (e) => { if (!started) reject(e.error || e); else end(); };
+      window.speechSynthesis.cancel(); // drop anything still queued
+      window.speechSynthesis.speak(u);
+      // some browsers silently never start (autoplay rules) - fail over
+      setTimeout(() => {
+        if (!started) { window.speechSynthesis.cancel(); reject(new Error("never started")); }
+      }, 3000);
+    });
+  });
+}
+
 // sendMessage hands every finished reply here
 function callReply(text) {
   if (!_call || _call.phase === 'ended') return;
@@ -1253,27 +1421,21 @@ function callReply(text) {
   const watchdog = setTimeout(() => {
     if (_call && _call.phase === 'tts') { console.log('[call] tts timed out'); callSet('listening'); }
   }, 45000);
-  fetch('/speak', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-  })
-    .then((res) => res.blob())
-    .then((blob) => {
+  // speakAloud resolves once audio starts; the handle is what callSet
+  // pauses (as _call.audio) when the phase moves on.
+  let handle = null;
+  const done = () => { if (_call && handle && _call.audio === handle) callSet('listening'); };
+  speakAloud(text, done)
+    .then((h) => {
       clearTimeout(watchdog);
-      if (!_call || _call.phase !== 'tts') return;
-      if (!blob || blob.size === 0) { console.log('[call] tts returned empty audio'); callSet('listening'); return; }
+      if (!_call || _call.phase !== 'tts') { h.pause(); return; }
+      handle = h;
       callSet('speaking');
-      const audio = new Audio(URL.createObjectURL(blob));
-      const done = () => { if (_call && _call.audio === audio) callSet('listening'); };
-      audio.onended = done;
-      audio.onerror = (e) => { console.log('[call] audio error', e); done(); };
-      _call.audio = audio;
-      audio.play().catch((e) => { console.log('[call] play blocked', e); done(); });
+      _call.audio = h;
     })
     .catch((e) => {
       clearTimeout(watchdog);
-      console.log('[call] tts fetch failed', e);
+      console.log('[call] tts failed', e);
       if (_call && _call.phase === 'tts') callSet('listening');
     });
 }
@@ -1357,6 +1519,11 @@ function set_context(what) {
     }
     if (message.type === 'image_done') {
       _removeImagePlaceholder();
+      _removeSvgProgress();
+      return;
+    }
+    if (message.type === 'svg_progress') {
+      _showSvgProgress(message.svg);
       return;
     }
     if (message.type === 'set_theme_color') {
@@ -1465,7 +1632,8 @@ function set_context(what) {
       return;
     }
     // an image tool row arrived (real image or failure note) - placeholder's done
-    if (message.role === 'assistant' && typeof message.content === 'object' && ['generate_image', 'edit_image'].includes(message.content?.name)) {
+    if (message.role === 'assistant' && typeof message.content === 'object' && ['generate_image', 'edit_image', 'draw_svg'].includes(message.content?.name)) {
+      if (message.content?.name === 'draw_svg') _removeSvgProgress();
       _removeImagePlaceholder();
     }
     console.log("Received:", message);
@@ -1696,6 +1864,9 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
               // keeps emitting - same rule as the server's _strip_parens_lines,
               // so the live bubble and the TTS text match the saved reply.
               partialContent = partialContent.replace(/^\([\W_\s]+\)/gm, "");
+              // ...and made-up image references ({image: /images/x.svg}) -
+              // same rule as the server's _FAKE_IMAGE_REF_RE.
+              partialContent = partialContent.replace(FAKE_IMAGE_REF_RE, "");
               contentEl.innerHTML = format(partialContent);
               callBumpTokens();
             } else if (reasoning) {
@@ -1757,8 +1928,11 @@ async function sendMessage(regenText, isRegen, isEdit, originalText) {
   }
 }
 
+// made-up image references the model writes ({image: /images/x.svg}) - same
+// rule as the server's _FAKE_IMAGE_REF_RE; also hides them in older replies
+const FAKE_IMAGE_REF_RE = /[\[{(]\s*["']?(?:image|svg|drawing|diagram)["']?\s*:\s*[^\]})\n]*[\]})]/gi;
 function format(text) {
-  return marked.parse(text);
+  return marked.parse(String(text || "").replace(FAKE_IMAGE_REF_RE, ""));
 }
 
 // marked renders markdown images (e.g. external magnific.com links) as bare
@@ -2412,20 +2586,13 @@ function makeSpeakBtn(text) {
       speakBtn.disabled = false;
       speakBtn.innerHTML = '<i class="fas fa-volume-up"></i><span>speak</span>';
     };
+    holdStart(); // hold music until the voice actually starts
     try {
-      const res = await fetch('/speak', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      const blob = await res.blob();
-      if (!blob || blob.size === 0) throw new Error('empty audio');
-      const audio = new Audio(URL.createObjectURL(blob));
-      audio.onended = reset;
-      audio.onerror = reset;
-      await audio.play();
+      await speakAloud(text, reset);
     } catch {
       reset();
+    } finally {
+      holdStop();
     }
   });
   return speakBtn;

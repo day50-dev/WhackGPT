@@ -46,6 +46,12 @@ a:hover {
 .svg-drawing {
   width: 100%;
 }
+/* the drawing as it streams in (inline svg; replaced by the saved <img>) */
+.svg-live svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
 
 /* "cooking" placeholder while the server generates/edits an image */
 /* ── voice call overlay - "WhackGPT is calling you" ─────────────── */
