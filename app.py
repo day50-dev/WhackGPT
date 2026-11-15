@@ -2635,18 +2635,18 @@ async def chat(data: dict):
                     break
             history = add_to_session(uid)
             fetched_pages = ""
+        elif not data.get("regen") and data.get("sidechannel") in ("fernando_joined", "fernando_back"):
+            # put through right after Haruto's last line: there is no
+            # customer line - Fernando's turn is built from the handoff cue
+            history = add_to_session(uid)
+            touch(uid)
+            fetched_pages = ""
         elif not data.get("regen"):
             row = {"role": "user", "content": data["text"]}
             if data.get("images"):
                 row["images"] = data["images"]
             if data.get("speaker") in ("harriet", "haruto"):
                 row["speaker"] = data["speaker"]  # HR / the intern, not the user
-            elif data.get("sidechannel") in ("fernando_joined", "fernando_back"):
-                # handoff from Haruto: this line was small talk said to HIM -
-                # save it as his (context only, in his window too); Fernando's
-                # cue to take over is added below, never stored
-                row["haruto"] = True
-                row["sidechannel"] = "to_haruto"
             elif data.get("sidechannel") in ("harriet_joined", "harriet_left"):
                 row["sidechannel"] = data["sidechannel"]  # first message since she joined / left
             history = add_to_session(uid, row)
@@ -2763,7 +2763,7 @@ async def chat(data: dict):
         if raw:
             st = json.loads(raw)
             is_plain = (
-                not data.get("edit") and not data.get("regen")
+                not data.get("edit") and not data.get("regen") and not _handoff
                 and text and not text.startswith("/")
             )
             published = False
@@ -3517,7 +3517,15 @@ def _haruto_window(uid, limit=40):
     return window[-limit:]
 
 
-def haruto_line(uid):
+HARUTO_FINAL = {
+    "joined": ("Fernando has just come on the line. Reply to the customer in one short sentence "
+               "and tell them you're putting Fernando on now - something like \"Oh, here's Fernando!\""),
+    "back": ("Fernando and Carol are back on the line. Reply to the customer in one short sentence "
+             "and tell them they're back - something like \"Oh, here's Fernando again!\""),
+}
+
+
+def haruto_line(uid, final=""):
     """Haruto's next spoken line: his system prompt + his own window. The
     window ends with either a "new call has begun" note (he just picked up)
     or the customer's latest line to him."""
@@ -3526,7 +3534,8 @@ def haruto_line(uid):
         window.append({"role": "user", "content": HARUTO_NEW_CALL})
     res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
         "model": HARUTO_MODEL,
-        "messages": [{"role": "system", "content": HARUTO_SYSTEM}] + window,
+        "messages": [{"role": "system", "content": HARUTO_SYSTEM
+                      + ("\n\n" + HARUTO_FINAL[final] if final in HARUTO_FINAL else "")}] + window,
         "stream": False,
         "think": False,
     }, timeout=90.0)
@@ -3565,7 +3574,7 @@ async def haruto(data: dict):
         add_to_session(uid, {"role": "user", "content": HARRIET_HUDDLE_LINE,
                              "speaker": "harriet", "aside": True, "huddle": True})
     try:
-        say = await asyncio.to_thread(haruto_line, uid)
+        say = await asyncio.to_thread(haruto_line, uid, data.get("final") or "")
     except Exception as e:
         print(f"haruto: failed: {e}")
         say = ""
