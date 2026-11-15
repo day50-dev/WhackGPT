@@ -1265,6 +1265,7 @@ function callSet(phase) {
     harrietCutIn(v);
     return;
   }
+  if (phase === 'thinking' && _call.phase !== 'thinking') _call.alive = Date.now();
   _call.phase = phase;
   if (phase === 'ended') { stopAllVoices(); holdKill(); } // hang up: silence, right now
   if (phase !== 'ringing' && _call.ring) { _call.ring.pause(); _call.ring = null; }
@@ -1275,6 +1276,19 @@ function callSet(phase) {
   if (phase === 'listening') callListen(); else callStopListening();
   callRender();
 }
+
+// Watchdog: a reply that dies on the way (the server restarted mid-reply,
+// a request that never comes back) must not leave the call on "thinking"
+// forever - after a minute with nothing coming in, it's your turn again.
+var THINKING_DEADLINE = 60000;
+setInterval(() => {
+  const c = _call;
+  if (!c || c.phase !== 'thinking' || Date.now() - (c.alive || 0) < THINKING_DEADLINE) return;
+  console.log('[call] nothing came back for a minute - your turn again');
+  c.harutoThinking = c.harrietThinking = false;
+  c.heard = '';
+  callSet('listening');
+}, 5000);
 
 function callRender() {
   if (window.Hangout) Hangout.render(_call); // the video-call screen once answered
@@ -1304,6 +1318,7 @@ function callRender() {
 // as they arrive - a moving number proves the line is alive.
 function callBumpTokens() {
   if (_call && _call.phase === 'thinking') {
+    _call.alive = Date.now(); // (the thinking watchdog: something is coming)
     _call.tokens = (_call.tokens || 0) + 1;
     callRender();
   }

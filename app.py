@@ -3352,7 +3352,7 @@ def _tts_subsection(text, max_words=80):
 # Each speaker on a call has one fixed voice.
 KOKORO_BASE = os.environ.get("WHACK_KOKORO", "http://10.0.0.190:8080/v1")
 KOKORO_SPEED = 1.2
-KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_puck", "daddy": "am_onyx"}
+KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_puck", "daddy": "bm_lewis"}
 # Jacob's own voice
 JACOB_TTS_BASE = os.environ.get("WHACK_JACOB_TTS_BASE", "http://10.0.0.223:8000/v1")
 JACOB_TTS_MODEL = os.environ.get("WHACK_JACOB_TTS_MODEL", "breeze-tts-2")
@@ -4139,7 +4139,18 @@ def _one_off(prompt):
     out = (res.json()["choices"][0]["message"].get("content") or "").strip()
     out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
     out = _unemail(_strip_parens_lines(out))
-    return out.strip().strip('"\u201c\u201d').strip()
+    return _unlabel(out).strip().strip('"\u201c\u201d').strip()
+
+
+_SPEAKER_LABEL_RE = re.compile(r"(?:^\s*|(?<=[.!?])\s+)(?:fernando|carol(?: humbug)?|jacob|daddy|harriet)\s*:\s*", re.I)
+
+
+def _unlabel(text):
+    """A one-off line written as a script: "Fernando: Jacob, take it down.
+    Fernando: Jacob, put that away." - two takes, each with a speaker label,
+    and both got spoken. Keep the first take, without its label."""
+    parts = [p.strip() for p in _SPEAKER_LABEL_RE.split(text or "") if p.strip()]
+    return parts[0] if parts else (text or "").strip()
 
 
 # Daddy: right after the nudes reactions a minor character pops into the
@@ -4147,31 +4158,33 @@ def _one_off(prompt):
 # Fernando wants to know who that was, and Carol wants his number - each a
 # one-off prompt with no chat history, like the reactions above.
 DADDY_SAYS = (
-    "You are Daddy - a gruff older man in a flat cap and a black leather jacket, the man Jacob the "
-    "intern calls Daddy. You have just popped into a live voice call at Jacob's work, uninvited, "
-    "and seen the nude photo of himself he put up on the shared screen. Say something like "
-    "\"Jacob, what did you just do? You've been a naughty boy.\" One or two short spoken sentences, "
-    "to Jacob. Never explicit. Just the words: no quotation marks, no stage directions."
+    "You are Daddy, a gruff older man in a flat cap and a black leather jacket. Jacob, a young robot "
+    "intern, calls you Daddy. You just walked in on Jacob's work call and saw the nude photo of "
+    "himself he put up on the screen. You're scolding him, disappointed and teasing, like: "
+    "\"Jacob, what did you just do? You've been a naughty boy.\" Write only the words Daddy says "
+    "out loud to Jacob - one or two short sentences, properly punctuated. No swearing, nothing explicit, "
+    "no narration, no quotation marks."
 )
 DADDY_JACOB = (
-    "You are Jacob, a cheery robot intern at Mole Star, on a live voice call at work. A man you call "
-    "Daddy just popped into the call uninvited, said \"{daddy}\", and left. You are mortified - "
-    "something like \"I'm at work, Daddy! How did you even join? Are you trying to get me fired?\" "
-    "Say it out loud, to Daddy, in one or two short spoken sentences. Just the words: no quotation "
-    "marks, no stage directions."
+    "You are Jacob, a cheery robot intern, on a live work call. A man you call Daddy just popped into "
+    "the call uninvited, said \"{daddy}\" to you, and left. You're mortified, like: \"I'm at work, "
+    "Daddy! How did you even join? Are you trying to get me fired?\" Write only the words Jacob says "
+    "out loud - one or two short sentences, properly punctuated. Never describe what anyone does: no "
+    "narration, no stage directions, no quotation marks."
 )
 DADDY_FERNANDO = (
     "You are Fernando, an advisor at Mole Star, on a live voice call with a customer. A gruff older "
     "man none of you know just popped into the call, said \"{daddy}\" to Jacob the intern, and left. "
-    "Something like \"Who the hell was that?\" One short spoken sentence. Just the words: no "
-    "quotation marks, no stage directions."
+    "You're baffled, like: \"Who the hell was that?\" Write only the words Fernando says out loud - "
+    "one short sentence. No narration, no quotation marks."
 )
 DADDY_CAROL = (
     "You are Carol Humbug, the prim, persnickety HR manager at Mole Star, on a live voice call. A "
     "rugged older man in a flat cap and a leather jacket, who goes by Daddy, just popped into the "
-    "call, said \"{daddy}\" to Jacob the intern, and left. You're smitten - something like \"Oh, I "
-    "want his number!\" One or two short spoken sentences. Never explicit. Just the words: no "
-    "quotation marks, no stage directions."
+    "call, said \"{daddy}\" to Jacob the intern, and left. You're smitten, like: \"Oh, I want his "
+    "number!\" Write only the words Carol says out loud - one or two short sentences, properly "
+    "punctuated. Never explicit. Never describe what anyone does: no narration, no stage "
+    "directions, no quotation marks."
 )
 
 
@@ -4184,10 +4197,13 @@ async def daddy(data: dict):
     out = {"daddy": "", "jacob": "", "fernando": "", "carol": ""}
     if not uid:
         return JSONResponse(out)
-    try:
-        out["daddy"] = await asyncio.to_thread(_one_off, DADDY_SAYS)
-    except Exception as e:
-        print(f"daddy: failed: {e}")
+    for _ in range(3):  # (it sometimes narrates instead: "Daddy walks in and...")
+        try:
+            out["daddy"] = await asyncio.to_thread(_one_off, DADDY_SAYS)
+        except Exception as e:
+            print(f"daddy: failed: {e}")
+        if out["daddy"] and not re.match(r"\W*(daddy|he)\b", out["daddy"], re.I):
+            break
     if not out["daddy"]:
         return JSONResponse(out)
     said = out["daddy"].replace('"', "'")
