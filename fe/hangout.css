@@ -285,11 +285,11 @@
   text-overflow: ellipsis;
 }
 
-/* Haruto the intern's bubble - same shape as Harriet's, sunnier */
+/* Jacob the intern's bubble - same shape as Harriet's, sunnier */
 .message-haruto { background: rgba(253, 214, 99, 0.12); border-left-color: #fdd663; }
 .message-haruto .harriet-name { color: #fdd663; }
 
-/* after the handoff Haruto stays on the call - a quiet tile, top-left */
+/* after the handoff Jacob stays on the call - a quiet tile, top-left */
 .ho-haruto {
   left: 12px;
   top: 12px;
@@ -302,12 +302,12 @@
 .ho.haruto-quiet .ho-haruto { display: flex; animation: ho-join 0.5s ease-out; }
 .ho-haruto .ho-face { width: auto; height: 62%; opacity: 0.85; }
 .ho-haruto .ho-mic { color: var(--ho-red); }
-/* the "presenting" label sits top-left too - Haruto's tile covers it, so
+/* the "presenting" label sits top-left too - Jacob's tile covers it, so
    push the presenting area's label right of him */
 .ho.haruto-quiet.presenting .ho-present-label { padding-left: calc(var(--ho-pip-w) + 24px); }
 /* the join notice sits top-centre - move it below the top tiles */
 .ho.haruto-quiet .ho-toast { top: calc(var(--ho-pip-w) * 0.75 + 24px); }
-/* with Haruto top-left and/or Harriet bottom-left, Fernando's name label goes top-right */
+/* with Jacob top-left and/or Harriet bottom-left, Fernando's name label goes top-right */
 .ho.haruto-quiet:not(.presenting) .ho-ai > .ho-name,
 .ho.harriet-here:not(.presenting) .ho-ai > .ho-name { top: 10px; bottom: auto; left: auto; right: 12px; }
 
@@ -379,7 +379,7 @@
 .wp-page :is(p, li, td, th, blockquote, span, strong, em) { font-family: "Times New Roman", Times, Georgia, serif; color: #111; }
 .wp-page table { box-shadow: none !important; border-radius: 0 !important; overflow: visible; background: #fff; }
 
-/* the private huddle: Fernando and Carol are muted and dimmed, Haruto has the line */
+/* the private huddle: Fernando and Carol are muted and dimmed, Jacob has the line */
 .ho-fern {
   left: 12px;
   top: 12px;

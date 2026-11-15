@@ -1228,6 +1228,13 @@ function holdStart() {
 }
 
 // stop: fade out, then pause
+// hang-up: no fade - the music stops this instant
+function holdKill() {
+  _holdOn = false;
+  clearInterval(_holdFade);
+  if (_hold) { _hold.pause(); _hold.volume = 0; }
+}
+
 function holdStop() {
   _holdOn = false;
   if (!_hold) return;
@@ -1244,11 +1251,11 @@ function callSet(phase) {
     return;
   }
   _call.phase = phase;
-  if (phase === 'ended' && window.speechSynthesis) window.speechSynthesis.cancel(); // Harriet mid-sentence
+  if (phase === 'ended') { stopAllVoices(); holdKill(); } // hang up: silence, right now
   if (phase !== 'ringing' && _call.ring) { _call.ring.pause(); _call.ring = null; }
   if (phase !== 'speaking' && _call.audio) { _call.audio.pause(); _call.audio = null; }
   // on hold while the reply is being written and voiced
-  // ...and while Carol's / Haruto's voice is being made (stopped when it starts)
+  // ...and while Carol's / Jacob's voice is being made (stopped when it starts)
   if (phase === 'thinking' || phase === 'tts' || phase === 'harriet' || phase === 'haruto') holdStart(); else holdStop();
   if (phase === 'listening') callListen(); else callStopListening();
   callRender();
@@ -1368,9 +1375,21 @@ function speakAloud(text, onEnd) {
   });
 }
 
+// Every voice that is playing (Fernando, Carol, Jacob) - hanging up stops
+// them all at once. _voiceEpoch bumps on hang-up so a voice still being
+// generated never starts playing afterwards.
+var _voices = new Set(), _voiceEpoch = 0;
+function stopAllVoices() {
+  _voiceEpoch++;
+  _voices.forEach((a) => { try { a.pause(); a.src = ''; } catch (e) {} });
+  _voices.clear();
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+}
+
 function speakServer(text, onEnd, voice) {
   const say = _speechText(text);
   if (!say) return Promise.reject(new Error("nothing to say"));
+  const epoch = _voiceEpoch;
   return fetch('/speak', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1379,9 +1398,11 @@ function speakServer(text, onEnd, voice) {
     .then((res) => res.blob())
     .then((blob) => {
       if (!blob || blob.size === 0) throw new Error('empty audio');
+      if (epoch !== _voiceEpoch) throw new Error('hung up');
       const audio = new Audio(URL.createObjectURL(blob));
+      _voices.add(audio);
       let finished = false;
-      const end = () => { if (!finished) { finished = true; onEnd && onEnd(); } };
+      const end = () => { _voices.delete(audio); if (!finished) { finished = true; onEnd && onEnd(); } };
       audio.onended = end;
       audio.onerror = end;
       return audio.play().then(() => audio);
@@ -1423,7 +1444,7 @@ function _speechText(text) {
 // (Apple / Google / Microsoft / Android), then any en-US voice.
 var COLLEAGUES = {
   harriet: { img: "harriet.avif", name: "Carol Humbug · HR, Mole Star" }, // (internally still "harriet")
-  haruto: { img: "intern.avif", name: "Haruto · intern, Mole Star" },
+  haruto: { img: "intern.avif", name: "Jacob · intern, Mole Star" },
 };
 var HARRIET_VOICES = /female|samantha|zira|aria|jenny|ava|allison|susan|victoria|karen|joanna|salli|kimberly|google us english|en-us-x-(sfg|tpc|iob)/i;
 function _harrietVoice(voices) {
@@ -1523,11 +1544,19 @@ function callReply(text) {
   // turn, or text that streamed in while listening/muted (opening line,
   // slow pre-tool-call text).
   if (_call.phase !== 'thinking' && _call.phase !== 'listening' && _call.phase !== 'muted') return;
+  // Rambling: past RAMBLE_WORDS he is cut off mid-flow and Carol takes him
+  // aside (once a call; never the restated advice after a huddle)
+  const words = text.trim().split(/\s+/);
+  const ramble = words.length > RAMBLE_WORDS && !_call.rambled && !_call.restating && !_call.intern;
+  if (ramble) {
+    _call.rambled = true;
+    text = words.slice(0, RAMBLE_WORDS).join(' ') + '—';
+  }
   // TTS generation takes a few seconds - its own phase so the wait reads as
   // "speech is coming", not a dead line. 'speaking' only shows once audio
   // actually starts.
   _call.saying = text; // the hangout's caption
-  harrietReview(text);
+  if (!ramble) harrietReview(text); // the cut-off IS the intervention
   callSet('tts');
   // Watchdog: never leave the call stuck on "generating speech" forever.
   const watchdog = setTimeout(() => {
@@ -1536,7 +1565,11 @@ function callReply(text) {
   // speakAloud resolves once audio starts; the handle is what callSet
   // pauses (as _call.audio) when the phase moves on.
   let handle = null;
-  const done = () => { if (_call && handle && _call.audio === handle) callSet('listening'); };
+  const done = () => {
+    if (!_call || !handle || _call.audio !== handle) return;
+    if (ramble) carolCutsOff(_call);
+    else callSet('listening');
+  };
   speakAloud(text, done)
     .then((h) => {
       clearTimeout(watchdog);
@@ -1556,9 +1589,9 @@ function callRing(out, topic) {
   if (_call) return; // already ringing or on a call
   _call = { phase: 'ringing', out, topic: (topic || '').trim(), rec: null, ring: null, audio: null, heard: '', tokens: 0 };
   // turns = 0, 1 or 2, decided now. 0: Fernando answers (the base case).
-  // Otherwise Haruto picks up and gets `turns` replies from you, then his
+  // Otherwise Jacob picks up and gets `turns` replies from you, then his
   // last line puts you through and Fernando speaks right after him - always
-  // Haruto -> Fernando, never Haruto -> you -> Fernando.
+  // Jacob -> Fernando, never Jacob -> you -> Fernando.
   const turns = Math.floor(Math.random() * 3);
   if (turns > 0) internStart(_call, turns);
   const ring = new Audio('ringtones/ringtone' + Math.floor(Math.random() * 30 + 1) + '.m4a');
@@ -1596,8 +1629,8 @@ function callAnswer() {
     body: JSON.stringify({ uid: _uid, state: 'live' }),
   }).finally(() => {
     if (!_call) return;
-    // Haruto opens with his introduction; a /call topic is just saved (it is
-    // context for Fernando - Haruto never hears it)
+    // Jacob opens with his introduction; a /call topic is just saved (it is
+    // context for Fernando - Jacob never hears it)
     if (intern) harutoTurn(topic || '');
     else if (topic && _call.phase === 'listening') callSend(topic);
   });
@@ -1695,7 +1728,23 @@ function harrietCutIn(v) {
   else harrietSpeak(v.text);
 }
 
-// The private talk: Carol and Fernando go on mute, Haruto takes the line
+// Fernando rambled past RAMBLE_WORDS: Carol cuts in (joining the call if she
+// wasn't on it) and takes him aside - the same huddle, but Jacob just
+// carries on his own conversation with the customer as if nothing happened.
+var RAMBLE_WORDS = 100;
+var RAMBLE_LINE = "Fernando, that's quite enough. A word - privately.";
+function carolCutsOff(call) {
+  if (_call !== call) return;
+  if (!call.harriet) {
+    call.harriet = true;
+    call.harrietRolled = true; // she won't also roll in later
+    Hangout.harrietJoined();
+  }
+  call.huddleKind = 'ramble';
+  harrietSpeak(RAMBLE_LINE, () => startHuddle(call));
+}
+
+// The private talk: Carol and Fernando go on mute, Jacob takes the line
 // again for 1-3 rounds of small talk, then Fernando comes back and restates
 // his last advice (fernandoJoins, sidechannel fernando_back) - which Carol
 // lets slide. Once per call.
@@ -1710,8 +1759,8 @@ function startHuddle(call) {
   harutoTurn('');
 }
 
-// ---- Haruto, the intern ---------------------------------------------------
-// Haruto has the line for `turns` replies from you: his opener (the intro, or
+// ---- Jacob, the intern ---------------------------------------------------
+// Jacob has the line for `turns` replies from you: his opener (the intro, or
 // "they stepped away" in Carol's huddle), your reply, ... and after your last
 // reply his final line puts you through - then Fernando speaks straight away.
 // He is never shown what was meant for Fernando, and Fernando never sees any
@@ -1747,7 +1796,7 @@ function harutoTurn(text) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       uid: _uid, text, mode: open ? 'open' : 'chat',
-      huddle: open && !!call.huddle,
+      huddle: open && call.huddle ? (call.huddleKind || 'judge') : '',
       final: final ? (call.huddle ? 'back' : 'joined') : '',
     }),
   })
@@ -1773,7 +1822,7 @@ function harutoSpeak(text, then) {
     .catch((e) => { console.log('[haruto] voice failed', e); after(); });
 }
 
-// The intern hands over: right after Haruto's last line Fernando speaks,
+// The intern hands over: right after Jacob's last line Fernando speaks,
 // going straight into what the customer wants (the server builds his turn
 // from a cue - there is no customer line for it). From here it is a normal
 // call (Carol may roll in).
@@ -1784,6 +1833,7 @@ function fernandoJoins(call) {
   // back from Carol's private talk: he restates his last advice
   const back = call.huddle;
   call.huddle = false;
+  call.huddleKind = '';
   if (back) { call.restating = true; Hangout._toast('Fernando and Carol are back'); }
   else Hangout.fernandoJoined();
   call.heard = '';

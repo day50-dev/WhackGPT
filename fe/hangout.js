@@ -137,8 +137,8 @@ var Hangout = (function () {
           '<div class="ho-name">Carol · HR <i class="fas fa-microphone ho-mic"></i></div>' +
         '</div>' +
         '<div class="ho-tile ho-haruto">' +
-          '<img class="ho-face" src="intern.avif" alt="Haruto">' +
-          '<div class="ho-name">Haruto · intern <i class="fas fa-microphone-slash ho-mic"></i></div>' +
+          '<img class="ho-face" src="intern.avif" alt="Jacob">' +
+          '<div class="ho-name">Jacob · intern <i class="fas fa-microphone-slash ho-mic"></i></div>' +
         '</div>' +
         '<div class="ho-tile ho-fern">' +
           '<img class="ho-face" src="whack-face.avif" alt="Fernando">' +
@@ -211,12 +211,12 @@ var Hangout = (function () {
       setOpen(live);
       if (!live) return;
       const p = call.phase;
-      // the main tile is Haruto the intern until he hands over to Fernando
+      // the main tile is Jacob the intern until he hands over to Fernando
       const intern = !!call.intern;
       if (root.dataset.intern !== String(intern)) {
         root.dataset.intern = String(intern);
         root.querySelector(".ho-ai .ho-face").src = intern ? "intern.avif" : "whack-face.avif";
-        root.querySelector(".ho-ai-name").textContent = intern ? "Haruto · intern" : "Fernando";
+        root.querySelector(".ho-ai-name").textContent = intern ? "Jacob · intern" : "Fernando";
       }
       root.classList.toggle("ai-speaking", p === "speaking" || p === "haruto");
       root.classList.toggle("harriet-here", !!call.harriet);
@@ -234,7 +234,7 @@ var Hangout = (function () {
       root.querySelector(".ho-cap-ai").textContent = "";
       let status = STATUS[p] || "";
       if (p === "listening" && call.heard) status = ""; // they're talking
-      if (p === "thinking" && call.harutoThinking) status = "Haruto is thinking…";
+      if (p === "thinking" && call.harutoThinking) status = "Jacob is thinking…";
       else if (p === "thinking" && call.harrietThinking) status = "Carol is thinking…";
       else if (p === "thinking" && call.tokens) status += " " + call.tokens + " tokens";
       root.querySelector(".ho-status").textContent = status;

@@ -1172,7 +1172,7 @@ def filter_tools(ll):
                 row = {"role": "user", "content": row}
             else:
                 row = {"role": "user", "content": str(row)}
-            # Haruto's small talk is between him and the customer - Fernando
+            # Jacob's small talk is between him and the customer - Fernando
             # never sees it (his lines, or anything said to him)
             if row.get("haruto") or row.get("speaker") == "haruto":
                 continue
@@ -1180,6 +1180,7 @@ def filter_tools(ll):
             aside = row.pop("aside", None)
             side = row.pop("sidechannel", None)
             huddle = row.pop("huddle", None)
+            row.pop("ramble", None)
             if isinstance(row.get("content"), str):
                 note = (
                     HARRIET_HUDDLE if speaker == "harriet" and huddle
@@ -2523,7 +2524,7 @@ def _advice_before_huddle(uid, limit=80):
 
 def _customer_request(uid, limit=60):
     """The customer's newest real request - a /call topic or their last chat
-    message - skipping small talk with Haruto, lines to Carol, colleagues'
+    message - skipping small talk with Jacob, lines to Carol, colleagues'
     lines and call events. None if there isn't one."""
     for raw in rds.lrange(f"sess:{uid}", 0, limit):
         try:
@@ -2674,7 +2675,7 @@ async def chat(data: dict):
             history = add_to_session(uid)
             fetched_pages = ""
         elif not data.get("regen") and data.get("sidechannel") in ("fernando_joined", "fernando_back"):
-            # put through right after Haruto's last line: there is no
+            # put through right after Jacob's last line: there is no
             # customer line - Fernando's turn is built from the handoff cue
             history = add_to_session(uid)
             touch(uid)
@@ -2748,7 +2749,7 @@ async def chat(data: dict):
         # as part of their message so it can answer from the actual content.
         model_history = filter_tools(history)
         # put through from the intern: Fernando's turn starts from a cue, not
-        # from the small talk the customer just made with Haruto
+        # from the small talk the customer just made with Jacob
         _handoff = {"fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK}.get(
             data.get("sidechannel")) if not data.get("regen") and not data.get("edit") else None
         # live voice call: no thinking tokens - the reply is spoken, speed wins
@@ -2768,7 +2769,7 @@ async def chat(data: dict):
                 _handoff += (f' The customer wants: "{ask}". Answer that now.'
                              if ask else " Ask them, in one short line, what they need.")
             _handoff += (" You are talking out loud to the customer: 1-2 short spoken sentences. Don't "
-                         "greet, don't say your name, don't mention Haruto.")
+                         "greet, don't say your name, don't mention Jacob.")
             model_history.append({"role": "user", "content": "sidechannel: " + _handoff})
         if fetched_pages and model_history and model_history[-1].get("role") == "user":
             model_history[-1]["content"] = (
@@ -3287,9 +3288,9 @@ HARRIET_SYSTEM = (
     "questionable scenarios. However you always defend the user because they are a valuable client.\n\n"
     "Fernando - he is reckless and gives bad advice and you think he's a problem. You can rephrase "
     "his advice in more neutral and benign and indirect ways.\n\n"
-    "Haruto - he's an intern that doesn't always make an appearance. He's earnest, naive and only "
+    "Jacob - he's an intern that doesn't always make an appearance. He's earnest, naive and only "
     "does small talk at the beginning, but you think very highly of him and value him far more than "
-    "Fernando - something like \"Why can't you learn more from Haruto sometimes? You don't know "
+    "Fernando - something like \"Why can't you learn more from Jacob sometimes? You don't know "
     "everything.\" This is humorous to the user because he seems completely worthless but you think "
     "he's the best person at the office.\n\n"
     "You will be given the context of what Fernando said along with our ranking of it by a "
@@ -3316,6 +3317,7 @@ HARRIET_ASIDE = (
 HARRIET_LEFT = "Carol Humbug (HR, Mole Star) has left the call. It is just you and the user again."
 
 HARRIET_HUDDLE_LINE = "Fernando, I need to talk to you privately."
+HARRIET_RAMBLE_LINE = "Fernando, that's quite enough. A word - privately."
 HARRIET_HUDDLE = (
     "That was Carol Humbug (HR) pulling you aside for a private talk about the advice you had just "
     "given. That private talk has already happened and is over."
@@ -3331,17 +3333,22 @@ HARUTO_HOLD = (
     "the line for the customer until they come back. The next message you say will go directly to the customer."
 )
 
-HARUTO_TO_HIM = "The customer was talking to Haruto, Mole Star's intern, there - not to you."
+HARUTO_RESUME = (
+    "You're back on the line with the customer. Just carry on your conversation with them from "
+    "where it left off."
+)
+
+HARUTO_TO_HIM = "The customer was talking to Jacob, Mole Star's intern, there - not to you."
 HARUTO_ASIDE = (
-    "That message is from Haruto, Mole Star's cheerful, clueless intern, making small talk "
+    "That message is from Jacob, Mole Star's cheerful, clueless intern, making small talk "
     "with the customer while you were off the line - it is not from the customer."
 )
 FERNANDO_JOINED = (
     "You have just been put through on this live voice call with the customer."
 )
 HARUTO_HANDOFF = (
-    "That was Haruto, Mole Star's clueless intern, who answered the customer's call and is now "
-    "handing it over to you. You are Fernando. Haruto stays on the line but has gone quiet; "
+    "That was Jacob, Mole Star's clueless intern, who answered the customer's call and is now "
+    "handing it over to you. You are Fernando. Jacob stays on the line but has gone quiet; "
     "take over the call: greet the customer and get down to business."
 )
 
@@ -3389,7 +3396,7 @@ def _unemail(text):
     lines = [l for l in (text or "").splitlines()
              if not re.match(r"\s*(subject|re|to|from)\s*:", l, re.I)]
     t = "\n".join(lines).strip()
-    # only the email-style "Dear X," opener - a spoken "Hi, this is Haruto"
+    # only the email-style "Dear X," opener - a spoken "Hi, this is Jacob"
     # is a real greeting and must survive
     t = re.sub(r"^\s*dear\b[^,\n]*,\s*", "", t, flags=re.I)
     t = re.sub(
@@ -3418,8 +3425,8 @@ def harriet_scores(text):
 
 
 def _harriet_cast(haruto):
-    return ("Haruto IS on this call - he answered first and is sitting quietly."
-            if haruto else "Haruto is not on this call.")
+    return ("Jacob IS on this call - he answered first and is sitting quietly."
+            if haruto else "Jacob is not on this call.")
 
 
 def harriet_scold(text, scores=None, haruto=False):
@@ -3499,12 +3506,12 @@ def harriet_reply(text, last="", haruto=False):
     return _unemail(_strip_parens_lines(out)), leaves
 
 
-# ---- Haruto: the intern who answers half the calls the user places ---------
-# Haruto runs on the plain drawing model: he only ever sees small talk, so
+# ---- Jacob: the intern who answers half the calls the user places ---------
+# Jacob runs on the plain drawing model: he only ever sees small talk, so
 # nothing he is given will trip its guardrails.
-HARUTO_MODEL = os.environ.get("WHACK_HARUTO_MODEL", "qwen3.8")
+HARUTO_MODEL = os.environ.get("WHACK_HARUTO_MODEL", "qwen3.8*blit")
 HARUTO_SYSTEM = (
-    "You are Haruto, a brand-new intern at Mole Star. You answer customers' phone calls when "
+    "You are Jacob, a brand-new intern at Mole Star. You answer customers' phone calls when "
     "Fernando (the company's AI) isn't there yet, and hold the line until he is. You are eager, "
     "cheery and know absolutely nothing - not the products, not the advice, not how anything "
     "works. You only make small talk: the weather, the break room snacks, your first weeks at "
@@ -3528,7 +3535,7 @@ HARUTO_SYSTEM = (
     "nonsense. Keep it close. Never explicit or graphic.\n\n"
     "Below is everything that has ever been said between you and this customer, across all of "
     "their calls. When a new call begins: if you have never talked to them before, introduce "
-    "yourself - something like \"Hey, I'm Haruto, the intern! Sorry, Fernando isn't here yet\" - "
+    "yourself - something like \"Hey, I'm Jacob, the intern! Sorry, Fernando isn't here yet\" - "
     "then start some small talk. If you HAVE talked before, don't introduce yourself again: greet "
     "them like you remember them, say Fernando isn't here yet, and pick the small talk back up.\n\n"
     "This is a LIVE PHONE CALL and everything you write is spoken aloud: 1-2 short spoken "
@@ -3540,8 +3547,11 @@ HARUTO_NEW_CALL = (
 )
 
 
+_HARUTO_NOTES = None  # set below, once the notes exist
+
+
 def _haruto_window(uid, limit=40):
-    """Haruto's own context window: ONLY what passed between the customer and
+    """Jacob's own context window: ONLY what passed between the customer and
     him in this chat, oldest first, across every call - plus a "new call has
     begun" note at the start of each call. Nothing Fernando or Carol said,
     no /call topic and no line meant for Fernando is ever in it."""
@@ -3560,12 +3570,12 @@ def _haruto_window(uid, limit=40):
         elif m.get("role") == "user" and m.get("content") == "you picked up":
             out.append({"role": "user", "content": HARUTO_NEW_CALL})
         elif m.get("speaker") == "harriet" and m.get("huddle"):
-            out.append({"role": "user", "content": HARUTO_HOLD})
+            out.append({"role": "user", "content": HARUTO_RESUME if m.get("ramble") else HARUTO_HOLD})
     out.reverse()
     # calls he never spoke on leave back-to-back notes - keep one per run
     window = []
     for m in out:
-        if m["content"] in (HARUTO_NEW_CALL, HARUTO_HOLD) and window and window[-1]["content"] in (HARUTO_NEW_CALL, HARUTO_HOLD):
+        if m["content"] in _HARUTO_NOTES and window and window[-1]["content"] in _HARUTO_NOTES:
             window[-1] = m  # keep the newest note of a run
             continue
         window.append(m)
@@ -3580,8 +3590,11 @@ HARUTO_FINAL = {
 }
 
 
+_HARUTO_NOTES = (HARUTO_NEW_CALL, HARUTO_HOLD, HARUTO_RESUME)
+
+
 def haruto_line(uid, final=""):
-    """Haruto's next spoken line: his system prompt + his own window. The
+    """Jacob's next spoken line: his system prompt + his own window. The
     window ends with either a "new call has begun" note (he just picked up)
     or the customer's latest line to him."""
     window = _haruto_window(uid)
@@ -3602,10 +3615,10 @@ def haruto_line(uid, final=""):
         out += " Oh, here's Fernando again!" if final == "back" else " Oh, here's Fernando!"
     # first time he has ever picked up for this customer: he says who he is
     met = any(m["role"] == "assistant" for m in window)
-    if not met and out and "haruto" not in out.lower():
-        held = window[-1]["content"] == HARUTO_HOLD  # Fernando stepped away, not late
-        out = ("Hey, I'm Haruto, the intern! " if held
-               else "Hey, I'm Haruto, the intern! Sorry, Fernando isn't here yet. ") + out
+    if not met and out and "jacob" not in out.lower():
+        held = window[-1]["content"] in (HARUTO_HOLD, HARUTO_RESUME)  # Fernando stepped away, not late
+        out = ("Hey, I'm Jacob, the intern! " if held
+               else "Hey, I'm Jacob, the intern! Sorry, Fernando isn't here yet. ") + out
     return out
 
 
@@ -3615,7 +3628,7 @@ async def haruto(data: dict):
     chat: the customer's line was said to HIM - saved tagged haruto (it goes
     in his window, and is plain context for Fernando later).
     open: he just picked up; any text is a /call topic - saved untagged, so
-    it is context for Fernando only and Haruto never sees it."""
+    it is context for Fernando only and Jacob never sees it."""
     uid = data.get("uid")
     text = (data.get("text") or "").strip()
     mode = "open" if data.get("mode") == "open" else "chat"
@@ -3628,9 +3641,15 @@ async def haruto(data: dict):
         add_to_session(uid, row)
     if data.get("huddle"):
         # Carol just pulled Fernando aside: her line goes in the chat (and
-        # tells Fernando, later, what happened); Haruto holds the line again
-        add_to_session(uid, {"role": "user", "content": HARRIET_HUDDLE_LINE,
-                             "speaker": "harriet", "aside": True, "huddle": True})
+        # tells Fernando, later, what happened); Jacob holds the line again.
+        # ramble: she cut him off for going on too long - Jacob just carries
+        # on his own chat with the customer as if nothing happened
+        ramble = data.get("huddle") == "ramble"
+        row = {"role": "user", "content": HARRIET_RAMBLE_LINE if ramble else HARRIET_HUDDLE_LINE,
+               "speaker": "harriet", "aside": True, "huddle": True}
+        if ramble:
+            row["ramble"] = True
+        add_to_session(uid, row)
     try:
         say = await asyncio.to_thread(haruto_line, uid, data.get("final") or "")
     except Exception as e:
