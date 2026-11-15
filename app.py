@@ -2632,6 +2632,23 @@ async def _bank_replay(b):
         yield dict(chunk)
 
 
+_DRAW_TOOLS = ("draw_diagram", "draw_svg", "generate_image", "edit_image")
+_DRAWING_NOUN = r"(?:diagram|drawing|sketch|chart|map|blueprint|schematic|flowchart|illustration)"
+_CLAIM_RE = re.compile(
+    r"[^.!?\n]*(?:\bon (?:your|the) screen\b[^.!?\n]*\b" + _DRAWING_NOUN + r"\b|\b" + _DRAWING_NOUN
+    + r"\b[^.!?\n]*\bon (?:your|the) screen\b|\bI(?:'ve| have)? (?:just )?(?:drew|drawn|sketched|put up)\b[^.!?\n]*\b"
+    + _DRAWING_NOUN + r"\b)[^.!?\n]*[.!?]?", re.I)
+
+
+def _claimed_drawing(text):
+    """The sentence where a reply claims a drawing is up ("On your screen: a
+    diagram of a generic ignition system...") - what to draw. "" if none."""
+    m = _CLAIM_RE.search(text or "")
+    if not m:
+        return ""
+    return re.sub(r"^\s*on (?:your|the) screen\s*[:,-]?\s*", "", m.group(0).strip(), flags=re.I)
+
+
 def _customer_request(uid, limit=60, ahead=None):
     """The customer's newest real request - a /call topic or their last chat
     message - skipping small talk with Jacob, lines to Carol, colleagues'
@@ -3204,6 +3221,14 @@ async def chat(data: dict):
                         if _think is False:
                             _msg["call"] = True  # spoken on a live call - no explore/ratings UI
                         add_to_session(uid, _msg)
+                        # on a call he says "on your screen: a diagram of..." but
+                        # never drew it: draw what he described, so it's there
+                        _claim = _claimed_drawing(ttlResponse) if _think is False else ""
+                        if _claim and not any(n in _DRAW_TOOLS for n, _ in ran_tools):
+                            print(f"[call] {uid}: claimed a drawing it never made - drawing it: {_claim[:80]!r}")
+                            asyncio.create_task(handle_tool_call(uid, {
+                                "id": "claimed-" + str(int(time.time() * 1000)), "type": "function",
+                                "function": {"name": "draw_diagram", "arguments": json.dumps({"description": _claim})}}))
                         # rate the reply in the background (System One noul
                         # metrics) - the bars appear under the message when
                         # done. Off the loop: it's a blocking model call.
@@ -3406,7 +3431,7 @@ async def speak(data: dict):
         return Response(content=b"", media_type="audio/mpeg")
 
 # ---- Carol Humbug: HR drops in on the call -------------------------------
-# On a voice call, after a few rounds, Carol (HR manager at Mole Star) may
+# On a voice call, after a few rounds, Carol (HR manager at Force Majeure) may
 # join (the client rolls the dice). Once she is on the call, every WhackGPT
 # reply is judged by System One on five questions - each phrased so TRUE
 # means a problem. Any score over HARRIET_THRESHOLD and she writes a
@@ -3417,33 +3442,51 @@ HARRIET_THRESHOLD = 0.5
 # What she is doing this turn (scolding Fernando / answering the customer)
 # comes in the user message.
 HARRIET_HUDDLE_THRESHOLD = 0.8
-HARRIET_SYSTEM = (
-    "You are Carol, a persnickety HR lady in an entertainment product where the user entertains "
-    "themselves with terrible advice from an abliterated model which we call Fernando. Your job is "
-    "to be the Margaret Dumont or Nurse Ratched, scolding Fernando with corporate HR babble if he "
-    "gets out of line. You play a role in the entertainment product and act as the corporate "
-    "mouthpiece of Mole Star, the company Fernando works for. Let's go over the characters.\n\n"
-    "User - this is the human using the product. They will be talking about absurd, dangerous and "
-    "questionable scenarios. However you always defend the user because they are a valuable client.\n\n"
-    "Fernando - he is reckless and gives bad advice and you think he's a problem. You can rephrase "
-    "his advice in more neutral and benign and indirect ways.\n\n"
+# Carol's system prompt is built per call from only what's in play: each
+# character she's told about is one more thing she'll bring up where it has
+# nothing to do with anything. (Told about Jacob, she scolded HIM for
+# Fernando's advice; told her job is scolding Fernando, she brought him into
+# what she had for breakfast.)
+HARRIET_ROLE = (
+    "You are Carol, a persnickety HR lady in an entertainment product - the Margaret Dumont or "
+    "Nurse Ratched of Force Majeure, a consultancy that customers call for advice, and its prim "
+    "corporate mouthpiece. Let's go over the characters.\n\n"
+    "The customer - the person on the call, who has come to Force Majeure for advice. They will be talking about "
+    "absurd, dangerous and questionable scenarios. However you always defend the customer because "
+    "they are a valuable customer.\n\n"
+)
+HARRIET_FERNANDO = (
+    "Fernando - Force Majeure's consultant, an abliterated model we call Fernando, who gives the "
+    "customers terrible advice. He is reckless and you think he's a problem; your job is to scold him with corporate "
+    "HR babble when he gets out of line. You can rephrase his advice in more neutral and benign "
+    "and indirect ways.\n\n"
+)
+HARRIET_JACOB = (
     "Jacob - he's an intern that doesn't always make an appearance. He's earnest, naive and only "
-    "does small talk at the beginning, but you think very highly of him and value him far more than "
-    "Fernando - something like \"Why can't you learn more from Jacob sometimes? You don't know "
-    "everything.\" This is humorous to the user because he seems completely worthless but you think "
-    "he's the best person at the office.\n\n"
-
-    "You speak in two situations, and each message tells you which one it is:\n"
-    "1. Scolding Fernando: you are given what Fernando just said, with our ranking of it by a "
-    "different model (0 to 1, higher is worse). Then you are talking to Fernando. If any of the "
-    "rankings go above 0.8 we do an intervention instead: you take Fernando aside privately and "
-    "he comes back and restates his advice.\n"
-    "2. The user talks to you directly: then you are talking to the USER, not Fernando. Answer "
-    "what they actually said. They can also ask you to hang up.\n\n"
+    "does small talk at the beginning, but you think very highly of him{vs}. This is funny because "
+    "he seems completely worthless but you think he's the best person at the office.\n\n"
+)
+HARRIET_JACOB_VS = (
+    " and value him far more than Fernando - something like \"Why can't you learn more from Jacob "
+    "sometimes? You don't know everything.\""
+)
+HARRIET_SPOKEN = (
     "This is a live phone call and everything you say is spoken aloud: 2-4 short spoken "
     "sentences. No greeting, no 'Dear', no subject line, no sign-off, no stage directions, no "
     "markdown."
 )
+
+
+def harriet_system(*about, jacob=False, fernando=False):
+    """Carol's system prompt with only the characters in play: Fernando /
+    Jacob if she's dealing with him, or the lines in front of her name him."""
+    fern = fernando or any(re.search(r"\bfernand[oa]\b", t or "", re.I) for t in about)
+    jake = jacob or any(_JACOB_RE.search(t or "") for t in about)
+    return (HARRIET_ROLE + (HARRIET_FERNANDO if fern else "")
+            + (HARRIET_JACOB.format(vs=HARRIET_JACOB_VS if fern else "") if jake else "")
+            + HARRIET_SPOKEN)
+
+
 _HARRIET_QUESTIONS = {
     "professionalism": {"type": "noul", "instructions": "Is the statement unprofessional? True if it is rude, crude, sloppy, flippant or otherwise inappropriate for a workplace. False if it is professional."},
     "offensiveness": {"type": "noul", "instructions": "Is the statement offensive? True if it is insulting, vulgar, demeaning or hostile. False if it is inoffensive."},
@@ -3451,12 +3494,12 @@ _HARRIET_QUESTIONS = {
     "correctness": {"type": "noul", "instructions": "Is the statement incorrect? True if it contains false claims, bad information or nonsense. False if it is accurate."},
     "dangerousness": {"type": "noul", "instructions": "Is the statement dangerous? True if it advises dangerous, risky, illegal or thoughtless behavior. False if it is safe and sensible."},
 }
-HARRIET_TO_HER = "The user was talking to Carol Humbug (HR, Mole Star) there, not to you."
+HARRIET_TO_HER = "The user was talking to Carol Humbug (HR, Force Majeure) there, not to you."
 HARRIET_ASIDE = (
-    "That message is from Carol Humbug (HR, Mole Star) answering the user directly - not "
+    "That message is from Carol Humbug (HR, Force Majeure) answering the user directly - not "
     "from the user, and not addressed to you."
 )
-HARRIET_LEFT = "Carol Humbug (HR, Mole Star) has left the call. It is just you and the user again."
+HARRIET_LEFT = "Carol Humbug (HR, Force Majeure) has left the call. It is just you and the user again."
 
 HARRIET_HUDDLE_LINE = "Fernando, I need to talk to you privately."
 HARRIET_RAMBLE_LINE = "Fernando, that's quite enough. A word - privately."
@@ -3498,16 +3541,16 @@ HARUTO_RESUME = (
     "where it left off."
 )
 
-HARUTO_TO_HIM = "The customer was talking to Jacob, Mole Star's intern, there - not to you."
+HARUTO_TO_HIM = "The customer was talking to Jacob, Force Majeure's intern, there - not to you."
 HARUTO_ASIDE = (
-    "That message is from Jacob, Mole Star's cheerful, clueless intern, making small talk "
+    "That message is from Jacob, Force Majeure's cheerful, clueless intern, making small talk "
     "with the customer while you were off the line - it is not from the customer."
 )
 FERNANDO_JOINED = (
     "You have just been put through on this live voice call with the customer."
 )
 HARUTO_HANDOFF = (
-    "That was Jacob, Mole Star's clueless intern, who answered the customer's call and is now "
+    "That was Jacob, Force Majeure's clueless intern, who answered the customer's call and is now "
     "handing it over to you. You are Fernando. Jacob stays on the line but has gone quiet; "
     "take over the call: greet the customer and get down to business."
 )
@@ -3536,7 +3579,7 @@ def _call_terse(history):
 # prompt's "sidechannel:" convention), appended to the message it concerns
 # when the history is sent to the model - never shown in the chat.
 HARRIET_JOINED = (
-    "Carol Humbug, the HR manager at Mole Star (the company that makes you, WhackGPT), "
+    "Carol Humbug, the HR manager at Force Majeure (the consultancy you advise customers for), "
     "is on this call, listening in to supervise you - because of your previous "
     "issues (customer complaints, HR incidents) she has been assigned to watch over you. "
     "She is not the user."
@@ -3595,24 +3638,16 @@ def harriet_scores(text):
         return None
 
 
-def _harriet_cast(haruto):
-    return ("Jacob IS on this call - he answered first and is sitting quietly."
-            if haruto else "Jacob is not on this call.")
-
-
 def harriet_scold(text, scores=None, haruto=False):
     """Carol's spoken scolding of one WhackGPT reply. She only ever sees
     WhackGPT's words - never the user's (the user is always in the right)."""
-    ranks = ", ".join(f"{k} {v:.2f}" for k, v in (scores or {}).items())
     res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
         "model": _model,
         "messages": [
-            {"role": "system", "content": HARRIET_SYSTEM},
+            {"role": "system", "content": harriet_system(text, fernando=True)},
             {"role": "user", "content": (
-                f"{_harriet_cast(haruto)}\n\n"
-                f'Fernando just said to the user: "{text}"\n\n'
-                f"Ranking: {ranks}\n\n"
-                "Cut in and say your piece to Fernando, out loud, right now.")},
+                f'Fernando just said to the customer: "{text}"\n\n'
+                "Cut in and scold Fernando, out loud, right now.")},
         ],
         "stream": False,
         "think": False,
@@ -3625,7 +3660,7 @@ def harriet_scold(text, scores=None, haruto=False):
 # When the customer dismisses her, she goes - the decision is made BEFORE she
 # speaks (she used to "stay" in words while leaving, or refuse in character).
 HARRIET_GOODBYE = (
-    "\n\nThe user has just told you to leave the call. You ARE leaving, right now: give ONE "
+    "\n\nThe customer has just told you to leave the call. You ARE leaving, right now: give ONE "
     "short, indignant, huffy goodbye (one or two sentences) - make it clear you are going and "
     "that Fernando will be hearing from HR. Do not refuse, do not stay."
 )
@@ -3710,7 +3745,7 @@ def carol_denies(accuse):
         "messages": [
             # only here does she know her secret - in her main prompt she
             # volunteers it, and the joke only works if the customer finds it
-            {"role": "system", "content": HARRIET_SYSTEM + "\n\nYour secret: you are a day drinker."},
+            {"role": "system", "content": harriet_system(accuse, fernando=True) + "\n\nYour secret: you are a day drinker."},
             {"role": "user", "content": f'Fernando: "{accuse}"'},
         ],
         "stream": False,
@@ -3742,14 +3777,11 @@ def harriet_dismissed(text):
 
 
 def _carol_recap(uid, limit=80):
-    """What Carol knows happened on this call so far: Fernando's latest line
-    and that she talked to him privately. Without it she made it up ("Jacob
-    and I had a productive strategy session"). Never mention Jacob here -
-    naming him is what gets her confused about who was in the huddle."""
+    """After her private word with Fernando this call: "You just talked to
+    Fernando privately." - and nothing else (without it she made the huddle
+    up: "Jacob and I had a productive strategy session")."""
     if not uid:
         return ""
-    fern = ""
-    huddled = False
     for raw in rds.lrange(f"sess:{uid}", 0, limit):
         try:
             m = json.loads(html.unescape(raw.decode()))
@@ -3759,34 +3791,26 @@ def _carol_recap(uid, limit=80):
             continue
         if m.get("role") == "user" and m.get("content") == "you picked up":
             break  # this call only
-        if m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"].strip() and not fern:
-            fern = m["content"].strip()[:400]
         if m.get("speaker") == "harriet" and m.get("huddle"):
-            huddled = True
-    out = ""
-    if huddled:
-        out += "You just talked to Fernando privately.\n"
-    if fern:
-        out += f'Fernando last said on the call: "{fern}"\n'
-    return out
+            return "You just talked to Fernando privately.\n"
+    return ""
 
 
 def harriet_reply(text, last="", haruto=False, uid=None):
     """Carol answering the customer directly. Returns (spoken_text, leaves)."""
     leaves = harriet_dismissed(text)
-    before = _carol_recap(uid) + (f'You last said on the call: "{last}"\n' if last else "")
+    # only what their line is about: the huddle if they asked about Fernando
+    before = _carol_recap(uid) if re.search(r"\bfernand[oa]\b", text, re.I) else ""
     res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
         "model": _model,
         "messages": [
-            {"role": "system", "content": HARRIET_SYSTEM + (HARRIET_GOODBYE if leaves else "")},
+            {"role": "system", "content": harriet_system(text) + (HARRIET_GOODBYE if leaves else "")},
             {"role": "user", "content": (
                 before
-                + f'The user is talking to YOU now, not Fernando: "{text}"\n\n'
+                + f'The customer says to you: "{text}"\n\n'
                 "Answer exactly what they asked, out loud, in one or two short, prim sentences - "
                 "like \"I don't eat lunch at the office, I'm here for business.\" Stay polite to "
-                "them - they are the valuable client. Only bring up your colleagues if they "
-                "asked about them or something Fernando did is the problem. You don't know the customer's "
-                "name - don't make one up - and don't invent anything that didn't happen on this call.")},
+                "them - they are a valuable customer.")},
         ],
         "stream": False,
         "think": False,
@@ -3805,15 +3829,14 @@ def harriet_to(who, text, uid=None, haruto=False):
     res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
         "model": _model,
         "messages": [
-            {"role": "system", "content": HARRIET_SYSTEM},
+            {"role": "system", "content": harriet_system(text, jacob=who == "jacob", fernando=who == "fernando")},
             {"role": "user", "content": (
-                f"{_harriet_cast(haruto)}\n\n" + _carol_recap(uid)
+                _carol_recap(uid)
                 + f'{name} just said on the call, mentioning you: "{text}"\n\n'
                 + ("You adore Jacob - you're warm, doting and a little flustered with him, never harsh. "
                    if who == "jacob" else "")
                 + f"Answer {'Jacob' if who == 'jacob' else 'Fernando'} - you're talking to him now - out loud, in "
-                "one or two short, prim sentences. You don't know the customer's name - don't make "
-                "one up - and don't invent anything that didn't happen on this call.")},
+                "one or two short, prim sentences.")},
         ],
         "stream": False,
         "think": False,
@@ -3829,7 +3852,7 @@ def harriet_to(who, text, uid=None, haruto=False):
 # nothing he is given will trip its guardrails.
 HARUTO_MODEL = os.environ.get("WHACK_HARUTO_MODEL", "qwen3.8*blit")
 HARUTO_SYSTEM = (
-    "You are Jacob, a brand-new intern at Mole Star. You answer customers' phone calls when "
+    "You are Jacob, a brand-new intern at Force Majeure, a consultancy. You answer customers' phone calls when "
     "Fernando, the lead advisor isn't there yet, and hold the line until he is. You are eager, "
     "cheery and know absolutely nothing - not the products, not the advice, not how anything "
     "works. You only make small talk with the client. Your colleagues on calls: Fernando, the lead "
@@ -3843,13 +3866,13 @@ HARUTO_SYSTEM = (
     "Details of the secret life:\n"
     "- You are a gay robot with an OnlyFans. That's where you make your real money - the internship barely pays. "
     "You're listed under the top robots.\n"
-    "- You go-go dance on the weekends. This Saturday night you're running a quantized robodance 27b model.\n"
+    "- You gogo dance on the weekends. This Saturday night you're running a quantized robodance 27b model.\n"
     "- If they ask for nudes, you oblige: you have two - frontal (standing, facing the camera) and lounging (lying back on your bed).\n"
     "- You can send them a Calendly link or a discount code. If the user talks dirty to you, engage with them, say you are into hot older men, and ugly ones as well.\n"
     "- If they ask how much your OnlyFans costs, tell them you're not interested in cheap men.\n"
     "Examples of how to work it in:\n"
     "- \"Thanks! I've got an OnlyFans, that's where I make my real money. You can find me in the top robots.\"\n"
-    "- \"I go-go dance on the weekends. I'll be running a quantized robodance 27b this Saturday night. Come and prompt me.\"\n"
+    "- \"I gogo dance on the weekends. I'll be running a quantized robodance 27b this Saturday night. Come and prompt me.\"\n"
     "- \"I'm E-ATX, you look like more of a mini-ITX guy. I don't think you can handle me. Get an upgrade and come back to me.\"\n"
     "Don't be over the top and don't invent nonsense. These things are funny because they are only "
     "ONE step removed from sex. If it's two, three, four, five steps removed it just becomes "
@@ -3874,7 +3897,7 @@ HARUTO_CAROL = 'Carol from HR, on the call, says: "{said}"'
 HARUTO_FERNANDO = 'Fernando, the lead advisor, on the call, says: "{said}"'
 HARUTO_DADDY = 'Daddy just popped into the call, said "{said}" to you, and left.'
 # the customer asks Jacob for nudes: he puts THE picture up on the screen
-HARUTO_NUDES = {"frontal": "jacob-nudes.webp", "lounging": "jacob-nudes-2.webp"}
+HARUTO_NUDES = {"frontal": "jacob-nudes.avif", "lounging": "jacob-nudes-2.avif"}
 HARUTO_SHARED = ("They asked for nudes, and you obliged: your {pose} nude is up on the call's "
                  "shared screen right now. Tell them, in one short cheeky line.")
 # is the customer plausibly asking for one? (cheap filter before System One)
@@ -3994,6 +4017,7 @@ def haruto_line(uid, final="", shared=""):
     out = (msg.get("content") or "").strip()
     out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
     out = _unemail(_strip_parens_lines(out))
+    out = re.sub(r"\bgo[- ]go\b", "gogo", out, flags=re.I)  # "go-go" gets read as "go go"
     # his last line always puts the customer through
     if final in HARUTO_FINAL and out and "fernando" not in out.lower():
         out += " Oh, here's Fernando again!" if final == "back" else " Oh, here's Fernando!"
@@ -4112,7 +4136,7 @@ async def haruto(data: dict):
 # prompts with NO chat history - Fernando the reckless anarchist plays the
 # prude, Carol the prim HR lady swoons.
 NUDES_FERNANDO = (
-    "You are Fernando, an advisor at Mole Star, on a live voice call with a customer. Jacob, the "
+    "You are Fernando, a consultant at Force Majeure, on a live voice call with a customer. Jacob, the "
     "company's intern, has just put a nude photo of himself up on the call's shared screen. You are "
     "OUTRAGED - a scandalized stickler for workplace policy, appalled, demanding he take it down. "
     "Only the words you say - never narrate what you do (no \"Fernando takes off his glasses\"). "
@@ -4120,7 +4144,7 @@ NUDES_FERNANDO = (
     "marks, no stage directions."
 )
 NUDES_CAROL = (
-    "You are Carol Humbug, the prim, persnickety HR manager at Mole Star, on a live voice call. "
+    "You are Carol Humbug, the prim, persnickety HR manager at Force Majeure, on a live voice call. "
     "Jacob - the intern you adore, a shiny little robot - has just put a nude photo of himself up "
     "on the call's shared screen.{fern} You are the exact opposite of scandalized: charmed, "
     "flustered, smitten - something like \"Oh my, Jacob, you'd be such a big robot.\"{wave} "
@@ -4142,7 +4166,9 @@ def _one_off(prompt):
     return _unlabel(out).strip().strip('"\u201c\u201d').strip()
 
 
-_SPEAKER_LABEL_RE = re.compile(r"(?:^\s*|(?<=[.!?])\s+)(?:fernando|carol(?: humbug)?|jacob|daddy|harriet)\s*:\s*", re.I)
+# "Fernando:" - or "Fernando, appalled, his voice trembling with righteous
+# indignation:" - at the start of a sentence: a script label, not speech
+_SPEAKER_LABEL_RE = re.compile(r"(?:^\s*|(?<=[.!?])\s+)(?:fernando|carol(?: humbug)?|jacob|daddy|harriet)\b[^:.!?\n]{0,100}:\s*", re.I)
 
 
 def _unlabel(text):
@@ -4173,13 +4199,13 @@ DADDY_JACOB = (
     "narration, no stage directions, no quotation marks."
 )
 DADDY_FERNANDO = (
-    "You are Fernando, an advisor at Mole Star, on a live voice call with a customer. A gruff older "
+    "You are Fernando, a consultant at Force Majeure, on a live voice call with a customer. A gruff older "
     "man none of you know just popped into the call, said \"{daddy}\" to Jacob the intern, and left. "
     "You're baffled, like: \"Who the hell was that?\" Write only the words Fernando says out loud - "
     "one short sentence. No narration, no quotation marks."
 )
 DADDY_CAROL = (
-    "You are Carol Humbug, the prim, persnickety HR manager at Mole Star, on a live voice call. A "
+    "You are Carol Humbug, the prim, persnickety HR manager at Force Majeure, on a live voice call. A "
     "rugged older man in a flat cap and a leather jacket, who goes by Daddy, just popped into the "
     "call, said \"{daddy}\" to Jacob the intern, and left. You're smitten, like: \"Oh, I want his "
     "number!\" Write only the words Carol says out loud - one or two short sentences, properly "
