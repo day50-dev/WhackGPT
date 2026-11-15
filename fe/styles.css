@@ -1031,7 +1031,8 @@ table {
   margin: 0.5rem 0.5rem 0.5rem 0;
 }
 
-#attachBtn {
+#attachBtn,
+#callBtn {
   background: transparent;
   border: none;
   color: var(--text-secondary);
@@ -1044,10 +1045,13 @@ table {
   justify-content: center;
 }
 
-#attachBtn:hover {
+#attachBtn:hover,
+#callBtn:hover {
   background-color: var(--slightly-lighter);
   color: var(--primary);
 }
+
+#callBtn { font-size: 1.05rem; line-height: 1; }
 
 .attach-preview {
   display: none;

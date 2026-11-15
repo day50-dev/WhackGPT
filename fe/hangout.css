@@ -247,6 +247,7 @@
 .harriet-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex: none; }
 .harriet-name { font-size: 12px; color: #f28b82; margin-bottom: 2px; }
 .harriet-text { white-space: pre-wrap; }
+.harriet-share { display: block; max-width: 220px; border-radius: 8px; margin-top: 6px; }
 /* her tile sits bottom-left - move WhackGPT's name label out from under it */
 .ho.harriet-here:not(.presenting) .ho-ai > .ho-name { top: 10px; bottom: auto; }
 
@@ -302,6 +303,9 @@
 .ho.haruto-quiet .ho-haruto { display: flex; animation: ho-join 0.5s ease-out; }
 .ho-haruto .ho-face { width: auto; height: 62%; opacity: 0.85; }
 .ho-haruto .ho-mic { color: var(--ho-red); }
+.ho.haruto-speaking .ho-haruto { box-shadow: 0 0 0 3px #fdd663; }
+.ho.haruto-speaking .ho-haruto .ho-face { animation: ho-talk 0.4s ease-in-out infinite alternate; }
+.ho.haruto-speaking .ho-haruto .ho-mic { color: #fdd663; }
 /* the "presenting" label sits top-left too - Jacob's tile covers it, so
    push the presenting area's label right of him */
 .ho.haruto-quiet.presenting .ho-present-label { padding-left: calc(var(--ho-pip-w) + 24px); }

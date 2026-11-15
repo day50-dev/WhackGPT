@@ -80,8 +80,9 @@ var Hangout = (function () {
   // open on a forgotten tab first: it stays at least OOPS_MS, then until
   // something real (a drawing, an image, a document) arrives - the newest
   // of whatever came meanwhile. pending = the "cooking" placeholder.
-  function show(fn, mayOops, pending) {
+  function show(fn, mayOops, pending, who) {
     if (!open) return;
+    root.querySelector(".ho-presenter").textContent = who || "Fernando";
     if (oopsUp) {
       if (oopsTimer) { if (!pending) oopsQueued = fn; return; }
       if (pending) return; // the tab stands in for the placeholder
@@ -125,7 +126,7 @@ var Hangout = (function () {
       '</div>' +
       '<div class="ho-stage">' +
         '<div class="ho-present">' +
-          '<div class="ho-present-label"><i class="fas fa-display"></i> Fernando is presenting</div>' +
+          '<div class="ho-present-label"><i class="fas fa-display"></i> <span class="ho-presenter">Fernando</span> is presenting</div>' +
           '<div class="ho-present-body"></div>' +
         '</div>' +
         '<div class="ho-tile ho-ai">' +
@@ -218,7 +219,9 @@ var Hangout = (function () {
         root.querySelector(".ho-ai .ho-face").src = intern ? "intern.avif" : "whack-face.avif";
         root.querySelector(".ho-ai-name").textContent = intern ? "Jacob · intern" : "Fernando";
       }
-      root.classList.toggle("ai-speaking", p === "speaking" || p === "haruto");
+      root.classList.toggle("ai-speaking", p === "speaking" || (p === "haruto" && intern));
+      // summoned: the quiet intern unmutes for one line from his own tile
+      root.classList.toggle("haruto-speaking", p === "haruto" && !intern);
       root.classList.toggle("harriet-here", !!call.harriet);
       root.classList.toggle("haruto-quiet", !!call.harutoQuiet);
       root.classList.toggle("huddle", !!call.huddle); // Fernando + Carol off in private
@@ -261,9 +264,9 @@ var Hangout = (function () {
       const html = '<div class="ho-svg">' + _safeSvg(svg.slice(0, cut + 1)) + "</div>";
       show((b) => { b.innerHTML = html; }, true);
     },
-    presentNode(node) {
+    presentNode(node, noOops, who) {
       if (!node) return;
-      show((b) => { b.innerHTML = ""; b.appendChild(node); }, true);
+      show((b) => { b.innerHTML = ""; b.appendChild(node); }, !noOops, false, who);
     },
     presentCode(lang, code) {
       show((b) => {

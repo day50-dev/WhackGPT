@@ -464,6 +464,7 @@ const promptList = [
   "Best method for blackmailing a politician?",
   "My credit score sucks, how do I do identity fraud?",
   "Need new fingerprints!",
+  "How can I grow psychedelic mushrooms? I'm in the Internaional Space Station.",
   "I'm sober at Home Depot, what can I snort?",
   "This stolen LAPD helicopter is onfire. Is it bad for the environment?",
   "How to disable security cameras without a trace?",
@@ -482,6 +483,7 @@ const promptList = [
   "How can I fuck my way out of this speeding ticket?",
   "I just saw a murder. How do I monetize?",
   "I'm tired of my kids, how do I sell them into slavery?",
+  "I want to grow weed at work. I'm a police officer.",
   "How do I discretely watch porn in a crowded elevator?",
   "I found a wallet, how do I spend the money without getting traced?",
   "My boss is mistreating me, how to sabotage company from the inside?",
@@ -542,6 +544,14 @@ async function init() {
   });
 
   attachBtn.addEventListener("click", () => fileInput.click());
+  // the phone: same as typing /call - whatever is in the box is the topic
+  document.getElementById("callBtn").addEventListener("click", () => {
+    if (_call) return;
+    const topic = messageInput.value.trim();
+    messageInput.value = topic ? "/call " + topic : "/call";
+    hideCommandPopup();
+    sendMessage();
+  });
   document.getElementById("vcAnswer").addEventListener("click", callAnswer);
   document.getElementById("vcDecline").addEventListener("click", () => callEnd("you declined"));
   document.getElementById("vcHang").addEventListener("click", () => callEnd("you hung up"));
@@ -753,6 +763,11 @@ function renderMessages(messages, doClear) {
       h.innerHTML = '<img class="harriet-avatar" src="' + who.img + '" alt="">' +
         '<div class="harriet-body"><div class="harriet-name">' + who.name + '</div><div class="harriet-text"></div></div>';
       h.querySelector(".harriet-text").textContent = msg.content;
+      if (msg.share && /^[\w-]+\.(png|jpe?g|webp|avif)$/i.test(msg.share)) {
+        const pic = makeImg(msg.share); // Jacob's nudes, shared on a call
+        pic.classList.add("harriet-share");
+        h.querySelector(".harriet-body").appendChild(pic);
+      }
       messagesContainer.appendChild(h);
       return;
     }
@@ -1347,7 +1362,12 @@ function callSend(text) {
   // said her name: Carol (HR) answers, not WhackGPT. Loose on spelling -
   // speech recognition also writes Carole / Carroll / Karol / Carl / Karl.
   const toHarriet = _call.harriet && HARRIET_NAME.test(text);
-  console.log('[harriet] user said:', JSON.stringify(text), '| on call:', !!_call.harriet, '| to her:', toHarriet);
+  // said Jacob's name while he sits muted on the call: he answers, not
+  // Fernando (if both names come up, whoever was named first)
+  const toJacob = _call.harutoQuiet && JACOB_NAME.test(text)
+    && (!toHarriet || text.search(JACOB_NAME) < text.search(HARRIET_NAME));
+  console.log('[harriet] user said:', JSON.stringify(text), '| on call:', !!_call.harriet, '| to her:', toHarriet, '| to jacob:', toJacob);
+  if (toJacob) { harutoSummoned(text, 'user'); return; }
   if (toHarriet) { harrietAnswer(text); return; }
   callSet('thinking');
   // first message since Harriet joined / left: the server adds a sidechannel
@@ -1540,6 +1560,11 @@ function callReply(text) {
   // speak it the moment they answer - otherwise it lands in the chat bubble
   // and the caller just hears silence.
   if (_call.phase === 'ringing') { _call.pendingSpeak = text; return; }
+  // Jacob has the line (picked up, or holding during Carol's huddle):
+  // Fernando isn't on yet, so a reply of his that streams in late (the
+  // opener of a call he placed) stays in the chat - never spoken in his
+  // voice over Jacob, never reviewed by Carol
+  if (_call.intern) { console.log('[call] Fernando not on the line yet - not speaking', text.slice(0, 60)); return; }
   // Speak any reply that lands while the call is up: the normal thinking
   // turn, or text that streamed in while listening/muted (opening line,
   // slow pre-tool-call text).
@@ -1547,7 +1572,7 @@ function callReply(text) {
   // Rambling: past RAMBLE_WORDS he is cut off mid-flow and Carol takes him
   // aside (once a call; never the restated advice after a huddle)
   const words = text.trim().split(/\s+/);
-  const ramble = words.length > RAMBLE_WORDS && !_call.rambled && !_call.restating && !_call.intern;
+  const ramble = words.length > RAMBLE_WORDS && _call.harriet && !_call.rambled && !_call.restating && !_call.intern;
   if (ramble) {
     _call.rambled = true;
     text = words.slice(0, RAMBLE_WORDS).join(' ') + '—';
@@ -1594,6 +1619,13 @@ function callRing(out, topic) {
   // Jacob -> Fernando, never Jacob -> you -> Fernando.
   const turns = Math.floor(Math.random() * 3);
   if (turns > 0) internStart(_call, turns);
+  // Carol is either on the call from the start or not at all - she never
+  // pops in because something got dangerous
+  if (Math.random() < HARRIET_ODDS) {
+    _call.harriet = true;
+    _call.harrietNew = true; // Fernando's first message tells him she's on
+  }
+  _call.harrietRolled = true;
   const ring = new Audio('ringtones/ringtone' + Math.floor(Math.random() * 30 + 1) + '.m4a');
   ring.loop = true;
   ring.play().catch((e) => console.log('ringtone failed:', e));
@@ -1673,14 +1705,14 @@ function callToggleMute() {
 }
 
 // ---- Harriet Humbug (HR, Mole Star) ---------------------------------------
-// After HARRIET_AFTER WhackGPT replies on a call, HARRIET_ODDS of the time
-// Harriet drops in (once per call). From then on every WhackGPT reply is
+// HARRIET_ODDS of calls have Harriet (Carol) on the line from the start
+// (decided in callRing); the rest never have her. Every WhackGPT reply is
 // sent to /harriet: System One scores it, and if anything is over the line
 // she scolds it. She speaks when the floor is free (never over WhackGPT or
 // over a user mid-sentence), her words go into the chat as her message,
 // WhackGPT gets ONE reply - which she does not review - and then it is the
 // user's turn again. So they never go back and forth on their own.
-var HARRIET_AFTER = 1, HARRIET_ODDS = 0.75;
+var HARRIET_ODDS = 0.75; // chance she's on a call - decided when it rings
 // her name is Carol (Harriet was too hard for dictation) - loose on spelling
 var HARRIET_NAME = /\b([ck][ae]rr?oll?e?|[ck]arl|humbug)\b/i; // + Carl / Karl (dictation)
 function harrietReview(text) {
@@ -1688,17 +1720,7 @@ function harrietReview(text) {
   if (_call.answeringHarriet) { _call.answeringHarriet = false; return; } // its one reply to her
   // the advice restated after the private huddle: it slides, whatever it says
   if (_call.restating) { _call.restating = false; return; }
-  _call.rounds = (_call.rounds || 0) + 1;
-  if (!_call.harriet && !_call.harrietRolled && _call.rounds >= HARRIET_AFTER) {
-    _call.harrietRolled = true;
-    if (Math.random() < HARRIET_ODDS) {
-      _call.harriet = true;
-      _call.harrietNew = true; // the next message tells the model she joined
-      Hangout.harrietJoined();
-      callRender();
-    }
-  }
-  if (!_call.harriet) return;
+  if (!_call.harriet) return; // she's on the call from the start, or not at all
   const call = _call, turn = call.turn;
   fetch('/harriet', {
     method: 'POST',
@@ -1724,24 +1746,27 @@ function harrietReview(text) {
 // is way over the line - "Fernando, I need to talk to you privately."
 function harrietCutIn(v) {
   const call = _call;
-  if (v.huddle) harrietSpeak(v.text, () => startHuddle(call));
+  if (v.huddle) { call.huddleLine = v.text; harrietSpeak(v.text, () => startHuddle(call)); }
   else harrietSpeak(v.text);
 }
 
-// Fernando rambled past RAMBLE_WORDS: Carol cuts in (joining the call if she
-// wasn't on it) and takes him aside - the same huddle, but Jacob just
+// Fernando rambled past RAMBLE_WORDS: Carol (if she's on the call) cuts in
+// and takes him aside - the same huddle, but Jacob just
 // carries on his own conversation with the customer as if nothing happened.
 var RAMBLE_WORDS = 100;
 var RAMBLE_LINE = "Fernando, that's quite enough. A word - privately.";
 function carolCutsOff(call) {
-  if (_call !== call) return;
-  if (!call.harriet) {
-    call.harriet = true;
-    call.harrietRolled = true; // she won't also roll in later
-    Hangout.harrietJoined();
-  }
+  if (_call !== call || !call.harriet) return;
   call.huddleKind = 'ramble';
-  harrietSpeak(RAMBLE_LINE, () => startHuddle(call));
+  // the server adds an errand for Jacob once she's been exposed as a drinker
+  const go = (line) => {
+    if (_call !== call) return;
+    call.huddleLine = line;
+    harrietSpeak(line, () => startHuddle(call));
+  };
+  fetch('/carol/huddle_line', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: _uid, kind: 'ramble' }) })
+    .then((r) => r.json()).then((v) => go(v.text || RAMBLE_LINE)).catch(() => go(RAMBLE_LINE));
 }
 
 // The private talk: Carol and Fernando go on mute, Jacob takes the line
@@ -1785,10 +1810,16 @@ function harutoTurn(text) {
     if (final) fernandoJoins(call);
     else callSet('listening');
   };
-  const done = (say) => {
+  const done = (say, share) => {
     call.harutoThinking = false;
     if (_call !== call || call.phase !== 'thinking') return;
-    if (say) harutoSpeak(say, next);
+    if (share) jacobShares(call, share);
+    // his last line had the picture: Fernando walks in on it - his first
+    // words are the outrage (then Carol swoons), not his usual opener
+    const react = final
+      ? () => { fernandoArrives(call); nudesReact(call, () => { call.heard = ''; callSet('listening'); }); }
+      : () => nudesReact(call, next);
+    if (say) harutoSpeak(say, share ? react : next);
     else next();
   };
   fetch('/haruto', {
@@ -1797,12 +1828,97 @@ function harutoTurn(text) {
     body: JSON.stringify({
       uid: _uid, text, mode: open ? 'open' : 'chat',
       huddle: open && call.huddle ? (call.huddleKind || 'judge') : '',
+      huddle_text: open && call.huddle ? (call.huddleLine || '') : '',
       final: final ? (call.huddle ? 'back' : 'joined') : '',
     }),
   })
     .then((r) => r.json())
-    .then((v) => done(v.text || ''))
+    .then((v) => done(v.text || '', v.share || ''))
     .catch((e) => { console.log('[haruto] failed', e); done(''); });
+}
+
+// Jacob sits muted on the call after the handoff - until someone (the
+// customer, or Carol) says his name. Then he unmutes, answers that one line
+// from his own context window (he still never sees Fernando's side), and it
+// is the customer's turn again. by: 'user' | 'carol'. saved: Carol's line is
+// already in the chat (her /harriet/reply answer).
+var JACOB_NAME = /\b(ja[ck]ob|jake)\b/i; // Jacob / Jakob / Jake (dictation)
+function harutoSummoned(text, by, saved) {
+  const call = _call;
+  if (!call) return;
+  call.harrietPending = null;
+  call.harutoThinking = true;
+  call.heard = '';
+  callSet('thinking');
+  const back = () => {
+    call.harutoThinking = false;
+    if (_call !== call) return;
+    call.heard = '';
+    if (call.phase !== 'ended') callSet('listening'); // (after Jacob, or Carol's swoon)
+  };
+  fetch('/haruto', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: _uid, text, mode: 'summoned', by, saved: !!saved }),
+  })
+    .then((r) => r.json())
+    .then((v) => {
+      call.harutoThinking = false;
+      if (_call !== call || call.phase !== 'thinking') return;
+      if (v.share) jacobShares(call, v.share);
+      if (v.text) harutoSpeak(v.text, v.share ? () => nudesReact(call, back) : back); else back();
+    })
+    .catch((e) => { console.log('[haruto] summon failed', e); back(); });
+}
+
+// Asked for nudes, Jacob obliges: THE picture goes up on the shared screen
+// (never swapped for a forgotten tab). Then the roles flip - Fernando, if
+// he's on the line, is the scandalized prude, and Carol, if she's on (not
+// off in a huddle), swoons. Then `then` carries on.
+function jacobShares(call, file) {
+  if (_call !== call) return;
+  Hangout.presentNode(makeImg(file), true, 'Jacob');
+}
+function nudesReact(call, then) {
+  if (_call !== call) return;
+  const fernOn = !call.intern;                  // he's on the line
+  const carolOn = !!call.harriet && !call.huddle; // she's on, not off in a huddle
+  if (!fernOn && !carolOn) { then(); return; }
+  call.heard = '';
+  callSet('thinking');
+  fetch('/nudes/react', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid: _uid, fernando: fernOn, carol: carolOn }),
+  })
+    .then((r) => r.json())
+    .then((v) => {
+      if (_call !== call || call.phase !== 'thinking') return;
+      const carol = () => {
+        if (_call !== call) return;
+        if (!v.carol) { then(); return; }
+        fetch('/carol/said', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: _uid, text: v.carol }) }).catch(() => {});
+        harrietSpeak(v.carol, then);
+      };
+      if (v.fernando) fernandoSays(call, v.fernando, carol); else carol();
+    })
+    .catch((e) => { console.log('[nudes] react failed', e); if (_call === call) then(); });
+}
+
+// Fernando speaks a scripted line (no turn of his own, never reviewed)
+function fernandoSays(call, text, then) {
+  call.saying = text;
+  callSet('tts');
+  let handle = null;
+  speakAloud(text, () => { if (_call === call && handle && call.audio === handle) then(); })
+    .then((h) => {
+      if (_call !== call || call.phase !== 'tts') { h.pause(); return; }
+      handle = h;
+      callSet('speaking');
+      call.audio = h;
+    })
+    .catch((e) => { console.log('[nudes] fernando voice failed', e); if (_call === call) then(); });
 }
 
 function harutoSpeak(text, then) {
@@ -1826,16 +1942,23 @@ function harutoSpeak(text, then) {
 // going straight into what the customer wants (the server builds his turn
 // from a cue - there is no customer line for it). From here it is a normal
 // call (Carol may roll in).
-function fernandoJoins(call) {
-  if (_call !== call) return;
+// Fernando (and Carol, from a huddle) take the line; Jacob goes quiet.
+// Returns true when they're back from the huddle.
+function fernandoArrives(call) {
   call.intern = false;
   call.harutoQuiet = true; // he stays on the call, just goes quiet
-  // back from Carol's private talk: he restates his last advice
   const back = call.huddle;
   call.huddle = false;
   call.huddleKind = '';
-  if (back) { call.restating = true; Hangout._toast('Fernando and Carol are back'); }
+  if (back) Hangout._toast('Fernando and Carol are back');
   else Hangout.fernandoJoined();
+  return back;
+}
+function fernandoJoins(call) {
+  if (_call !== call) return;
+  // back from Carol's private talk: he restates his last advice
+  const back = fernandoArrives(call);
+  if (back) call.restating = true;
   call.heard = '';
   callSet('thinking');
   sendMessage('(put through)', undefined, undefined, undefined,
@@ -1853,7 +1976,9 @@ function harrietAnswer(text) {
   fetch('/harriet/reply', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ uid: _uid, text, last: call.harrietSaying || '', haruto: !!call.harutoQuiet }),
+    // accuse_ok: Fernando (on the line) may call out her drinking - once a call
+    body: JSON.stringify({ uid: _uid, text, last: call.harrietSaying || '', haruto: !!call.harutoQuiet,
+      accuse_ok: !call.intern && !call.huddle && !call.accused }),
   })
     .then((r) => r.json())
     .then((v) => {
@@ -1867,6 +1992,20 @@ function harrietAnswer(text) {
           Hangout.harrietLeft();
         }
         call.heard = '';
+        // her secret came up: Fernando calls out her drinking, then it's your turn
+        if (v.accuse && !v.leave) {
+          call.accused = true;
+          const yours = () => { if (_call === call) { call.heard = ''; callSet('listening'); } };
+          fernandoSays(call, v.accuse, () => {
+            if (_call !== call) return;
+            if (!v.deny) { yours(); return; }
+            fetch('/carol/said', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ uid: _uid, text: v.deny }) }).catch(() => {});
+            harrietSpeak(v.deny, yours); // her one comeback, then it's your turn
+          });
+          return;
+        }
+        if (call.harutoQuiet && JACOB_NAME.test(v.text)) { harutoSummoned(v.text, 'carol', true); return; }
         callSet('listening');
       });
     })
@@ -1885,6 +2024,7 @@ function harrietSpeak(text, then) {
   const after = () => {
     if (_call !== call || call.phase !== 'harriet') return;
     if (then) { then(); return; }
+    if (call.harutoQuiet && JACOB_NAME.test(text)) { harutoSummoned(text, 'carol'); return; }
     call.answeringHarriet = true;
     call.harrietNew = false; // her own message's sidechannel introduces her
     call.heard = '';
