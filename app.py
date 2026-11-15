@@ -2596,7 +2596,7 @@ async def chat(data: dict):
     ):
         beat_text = data["text"].strip()
         if beat_text:
-            rds.set(f"beaten:{uid}", "1")
+            rds.set(f"beaten:{uid}", "1", ex=300)  # (safety net - see generate())
             add_to_session(uid, {"role": "assistant", "content": beat_text})
             run_in_background(rate_and_attach, uid, beat_text)
             run_in_background(solicit_references, uid, beat_text)
@@ -2858,6 +2858,9 @@ async def chat(data: dict):
             # assistant's reply and this output is discarded). TTL is a safety
             # net if the stream is interrupted before cleanup.
             rds.set(f"generating:{uid}", "1", ex=300)
+            # a beat belongs to ONE generation - a stale flag from an earlier
+            # one would discard every reply from here on
+            rds.delete(f"beaten:{uid}")
             if tool_cmd:
                 try:
                     _a = json.loads(tool_cmd["function"]["arguments"] or "{}")
@@ -3205,9 +3208,11 @@ async def chat(data: dict):
                 if _think is False:
                     _call_terse(history)
 
-            # Shared space: generation is done - clear the flag so a late
-            # beat can't fire (the model already responded).
+            # Shared space: generation is done - clear the flags so a late
+            # beat can't fire (the model already responded), and a beat that
+            # landed after the last check doesn't poison the next reply.
             rds.delete(f"generating:{uid}")
+            rds.delete(f"beaten:{uid}")
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
@@ -3235,11 +3240,16 @@ def _tts_subsection(text, max_words=80):
 KOKORO_BASE = os.environ.get("WHACK_KOKORO", "http://10.0.0.190:8080/v1")
 KOKORO_SPEED = 1.2
 KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_puck"}
+# Jacob's own voice
+JACOB_TTS_BASE = os.environ.get("WHACK_JACOB_TTS_BASE", "http://10.0.0.223:8000/v1")
+JACOB_TTS_MODEL = os.environ.get("WHACK_JACOB_TTS_MODEL", "breeze-tts-2")
+JACOB_TTS_VOICE = os.environ.get("WHACK_JACOB_TTS_VOICE", "air")
 
 
 @app.post("/speak")
 async def speak(data: dict):
-    """Read a reply aloud: {text, voice: "whackgpt" | "harriet"} -> MP3.
+    """Read a reply aloud: {text, voice: "whackgpt" | "harriet" | "haruto"} ->
+    MP3 (Jacob from his own host; Fernando and Carol from Kokoro).
     Only a subsection of a long reply is spoken (keeps the wait short).
     Empty audio on failure - the client then falls back to the browser's
     own speech synthesis."""
@@ -3251,6 +3261,22 @@ async def speak(data: dict):
     # KIDDING" -> I-M N-O-T ...). Lower-case shouted words of 3+ letters;
     # two-letter ones (AI, HR, OK, US) stay as they are.
     text = re.sub(r"\b[A-Z][A-Z'’]{2,}\b", lambda m: m.group(0).lower(), text)
+    # Jacob has his own voice host (breeze-tts-2, MP3 out); Kokoro stands
+    # in if it fails
+    if data.get("voice") == "haruto" and JACOB_TTS_BASE:
+        try:
+            res = await asyncio.to_thread(
+                requests.post,
+                f"{JACOB_TTS_BASE}/audio/speech",
+                json={"model": JACOB_TTS_MODEL, "input": text, "voice": JACOB_TTS_VOICE,
+                      "response_format": "mp3"},
+                timeout=60.0,
+            )
+            if res.status_code == 200 and res.content:
+                return Response(content=res.content, media_type="audio/mpeg")
+            print(f"speak: jacob tts host returned {res.status_code} - falling back to kokoro")
+        except Exception as e:
+            print(f"speak: jacob tts host failed ({e}) - falling back to kokoro")
     try:
         res = await asyncio.to_thread(
             requests.post,
@@ -3514,24 +3540,46 @@ def carol_booze_scores(text, said):
         return None
 
 
-# the user's lines - the bar for his zingers. Add more here.
+# the user's lines - Fernando says these word for word (the wording is the
+# joke, so no model writes them). Each has the topics it answers; a line
+# with no topics only comes up at random. Add more here.
 CAROL_BOOZE_ZINGERS = [
-    "What do you mean you don't drink? Your cubicle basically has a liquor license.",
-    "You go through more alcohol than a race car.",
-    "Your nickname at BevMo is Rent Check.",
-    "Oh come on Carol, the only person you have lunch with is Jack Daniel.",
-    "We see you stumbling around at 90% battery.",
-    "When you heard the holiday party had a keg, all you asked was what gauge siphon to bring.",
+    ("What do you mean you don't drink? Your cubicle basically has a liquor license.",
+     r"desk|office|cubicle|work|job|busy|meeting|business"),
+    ("You go through more alcohol than a race car.",
+     r"cars?|drive|driving|commute|fast|race|traffic|gas"),
+    ("Your nickname at BevMo is Rent Check.",
+     r"shop|shopping|store|errands?|grocer\w*|buy|money|rent|budget|spend"),
+    ("Oh come on Carol, the only person you have lunch with is Jack Daniel.",
+     r"lunch|eat|eating|food|meals?|salad|sandwich|snacks?|hungry|dinner|breakfast"),
+    ("We see you stumbling around at 90% battery.",
+     r"tired|sleep|energy|how are you|feeling|doing|morning|day|week|weekend|relax|unwind"),
+    ("When you heard the holiday party had a keg, all you asked was what gauge siphon to bring.",
+     r"party|parties|keg|holidays?|christmas|celebrat\w*|happy hour|bars?|beers?|drinks?"),
 ]
-FERNANDO_ACCUSES = (
-    "You are Fernando, a reckless advisor at Mole Star, on a live voice call with a customer and "
-    "Carol, the prim HR manager who is always scolding you. Everybody at the office knows Carol "
-    "is a day drinker, though she denies it. The customer just said to her: \"{text}\" and she "
-    "answered: \"{said}\"\n\nCall her out on her drinking with ONE short zinger - a joke, not "
-    "a description of her breath or what you saw. Lines like these:\n"
-    + "".join(f"- {z}\n" for z in CAROL_BOOZE_ZINGERS)
-    + "\nJust the words: no quotation marks, no stage directions."
-)
+
+
+def carol_zinger(uid, text, said):
+    """One of CAROL_BOOZE_ZINGERS, verbatim: the unused one whose topic
+    matches what the customer and Carol just said, else a random unused one.
+    No repeats in a conversation until they've all been used."""
+    key = f"carol_zingers_used:{uid}"
+    used = {int(x) for x in rds.smembers(key)}
+    fresh = [i for i in range(len(CAROL_BOOZE_ZINGERS)) if i not in used]
+    if not fresh:
+        rds.delete(key)
+        fresh = list(range(len(CAROL_BOOZE_ZINGERS)))
+    # the customer's words first - that's what Carol was answering
+    pick = None
+    for said_by in (text, said):
+        hits = [i for i in fresh if re.search(r"\b(?:" + CAROL_BOOZE_ZINGERS[i][1] + r")\b", said_by or "", re.I)]
+        if hits:
+            pick = random.choice(hits)
+            break
+    if pick is None:
+        pick = random.choice(fresh)
+    rds.sadd(key, pick)
+    return CAROL_BOOZE_ZINGERS[pick][0]
 
 def carol_denies(accuse):
     """Carol's one response to Fernando calling out her drinking - she just
@@ -3616,7 +3664,7 @@ HARUTO_SYSTEM = (
     "- You are a gay robot with an OnlyFans. That's where you make your real money - the internship barely pays. "
     "You're listed under the top robots.\n"
     "- You go-go dance on the weekends. This Saturday night you're running a quantized robodance 27b model.\n"
-    "- If they ask for nudes, you oblige: call show_nudes and your picture goes up on the call's shared screen.\n"
+    "- If they ask for nudes, you oblige: you have two - frontal (standing, facing the camera) and lounging (lying back on your bed).\n"
     "- You can send them a Calendly link or a discount code. If the user talks dirty to you, engage with them, say you are into hot older men, and ugly ones as well.\n"
     "- If they ask how much your OnlyFans costs, tell them you're not interested in cheap men.\n"
     "Examples of how to work it in:\n"
@@ -3644,14 +3692,13 @@ _HARUTO_NOTES = None  # set below, once the notes exist
 _JACOB_RE = re.compile(r"\b(ja[ck]ob|jake)\b", re.I)
 HARUTO_CAROL = 'Carol from HR, on the call, says: "{said}"'
 # the customer asks Jacob for nudes: he puts THE picture up on the screen
-HARUTO_NUDES_FILES = ("jacob-nudes.webp", "jacob-nudes-2.webp")
-HARUTO_TOOLS = [{"type": "function", "function": {
-    "name": "show_nudes",
-    "description": ("Put a nude photo of yourself up on the call's shared screen for the customer. "
-                    "Use it when they ask for nudes or to see you naked."),
-    "parameters": {"type": "object", "properties": {}},
-}}]
-HARUTO_SHARED = "Your nude is up on the call's shared screen now. Tell the customer, in one short cheeky line."
+HARUTO_NUDES = {"frontal": "jacob-nudes.webp", "lounging": "jacob-nudes-2.webp"}
+HARUTO_SHARED = ("They asked for nudes, and you obliged: your {pose} nude is up on the call's "
+                 "shared screen right now. Tell them, in one short cheeky line.")
+# is the customer plausibly asking for one? (cheap filter before System One)
+_NUDES_HINT_RE = re.compile(
+    r"\b(nudes?|naked|nudity|pics?|pictures?|photos?|selfies?|another|one more|again|the other"
+    r"|lounging|frontal|bed|show me|send me|see you|see more|see it|let me see)\b", re.I)
 HARUTO_SUMMONED = (
     "You've been sitting on mute on the call while Fernando talked to the customer. Someone just "
     "said your name, so you unmute. Answer the next message directly - pick up your own "
@@ -3720,18 +3767,21 @@ _HARUTO_REINTRO_RE = re.compile(
 
 
 _NUDES_ASKED_Q = {"asked": {"type": "noul", "instructions": (
-    "Is the customer asking to see nudes or naked pictures of Jacob? True only if they ask for "
-    "nudes, naked or nude photos, or to see him naked. False for compliments, flirting or "
+    "Is the customer asking Jacob to show or send a nude picture of himself? True if they ask "
+    "for nudes, a naked or nude photo, to see him naked, or - when they were already talking "
+    "about his nudes - for another one or a particular one. False for compliments, flirting or "
     "anything else.")}}
 
 
-def _nudes_asked(text):
-    """Jacob's show_nudes call only counts if the customer really asked."""
+def _nudes_asked(text, prev=""):
+    """Did the customer really ask Jacob for nudes?
+    prev: Jacob's line before theirs ("which one do you want?" -> "lounging")."""
     if not text:
         return False
+    state = (f'Jacob says: "{prev}"\n' if prev else "") + f'The customer says to Jacob: "{text}"'
     try:
         res = httpx.post(f"{MAGIC_API_BASE}/systemone", json={
-            "model": RATE_MODEL, "state": f'The customer says to Jacob: "{text}"', "questions": _NUDES_ASKED_Q,
+            "model": RATE_MODEL, "state": state, "questions": _NUDES_ASKED_Q,
         }, timeout=60.0)
         return float(res.json()["answers"]["asked"]["noul"]) > 0.5
     except Exception as e:
@@ -3739,35 +3789,20 @@ def _nudes_asked(text):
         return False
 
 
-def haruto_line(uid, final="", tools=True, asked=""):
+def haruto_line(uid, final="", shared=""):
     """Jacob's next spoken line: his system prompt + his own window. The
     window ends with either a "new call has begun" note (he just picked up)
-    or the customer's latest line to him. Returns (line, shared) - shared:
-    he called show_nudes, so his picture goes up on the screen."""
+    or the customer's latest line to him. shared: the pose of the nude that
+    just went up on the screen - he's told, and says so."""
     window = _haruto_window(uid)
     if not window or window[-1]["role"] != "user":
         window.append({"role": "user", "content": HARUTO_NEW_CALL})
     msgs = ([{"role": "system", "content": HARUTO_SYSTEM}] + window
-            + ([{"role": "user", "content": "(" + HARUTO_FINAL[final]
-                 + (" If they just asked for nudes, call show_nudes first." if tools else "") + ")"}]
-               if final in HARUTO_FINAL else []))
-    def ask(messages, with_tools):
-        body = {"model": HARUTO_MODEL, "messages": messages, "stream": False, "think": False}
-        if with_tools:
-            body["tools"] = HARUTO_TOOLS
-        return httpx.post(f"{DYVA_API_BASE}/chat/completions", json=body, timeout=90.0).json()["choices"][0]["message"]
-    msg = ask(msgs, tools)
-    calls = [t for t in (msg.get("tool_calls") or []) if (t.get("function") or {}).get("name") == "show_nudes"]
-    shared = bool(calls)
-    if shared and not _nudes_asked(asked):
-        # he reached for it unprompted - no picture, just his line
-        print(f"haruto: show_nudes without being asked ({asked!r}) - dropped")
-        shared = False
-        if not (msg.get("content") or "").strip():
-            msg = ask(msgs, False)
-    if shared and not (msg.get("content") or "").strip():
-        # the picture is up - now his line about it
-        msg = ask(msgs + [{"role": "user", "content": "(" + HARUTO_SHARED + ")"}], False)
+            + ([{"role": "user", "content": "(" + HARUTO_SHARED.format(pose=shared) + ")"}] if shared else [])
+            + ([{"role": "user", "content": "(" + HARUTO_FINAL[final] + ")"}] if final in HARUTO_FINAL else []))
+    msg = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
+        "model": HARUTO_MODEL, "messages": msgs, "stream": False, "think": False,
+    }, timeout=90.0).json()["choices"][0]["message"]
     out = (msg.get("content") or "").strip()
     out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
     out = _unemail(_strip_parens_lines(out))
@@ -3791,7 +3826,7 @@ def haruto_line(uid, final="", tools=True, asked=""):
         held = any(m["content"] in (HARUTO_HOLD, HARUTO_RESUME) for m in window[-2:])
         out = ("Hey, I'm Jacob, the intern! " if held
                else "Hey, I'm Jacob, the intern! Sorry, Fernando isn't here yet. ") + out
-    return out, shared and bool(out)
+    return out
 
 
 @app.post("/haruto")
@@ -3834,13 +3869,39 @@ async def haruto(data: dict):
         if ramble:
             row["ramble"] = True
         add_to_session(uid, row)
-    # show_nudes only on a line said to him (not his opener)
+    # asked him for nudes (said to him, not his opener)? System One decides,
+    # seeing his previous line too ("which one?" -> "lounging"). The pose they
+    # asked for, else he takes turns - never the same one twice in a row.
+    pose = ""
+    if mode != "open" and data.get("by") != "carol" and text and _NUDES_HINT_RE.search(text):
+        prev = ""
+        for raw in rds.lrange(f"sess:{uid}", 1, 12):  # (0 is the line just saved)
+            try:
+                m = json.loads(html.unescape(raw.decode()))
+            except Exception:
+                continue
+            if isinstance(m, dict) and m.get("speaker") == "haruto":
+                prev = m.get("content") or ""
+                if m.get("share"):
+                    prev += " (he has just put a nude photo of himself up on the screen)"
+                break
+        if await asyncio.to_thread(_nudes_asked, text, prev):
+            if re.search(r"\b(lounging|lounge|bed|lying|laying|reclin\w*)\b", text, re.I):
+                pose = "lounging"
+            elif re.search(r"\b(frontal|front|standing|full[- ]?body)\b", text, re.I):
+                pose = "frontal"
+            else:
+                last = (rds.get(f"jacob_nudes_last:{uid}") or b"").decode()
+                pose = next((p for p in HARUTO_NUDES if p != last), "frontal")
     try:
-        say, share = await asyncio.to_thread(haruto_line, uid, data.get("final") or "", mode != "open", text)
+        say = await asyncio.to_thread(haruto_line, uid, data.get("final") or "", pose)
     except Exception as e:
         print(f"haruto: failed: {e}")
-        say, share = "", False
-    pic = random.choice(HARUTO_NUDES_FILES) if share else ""
+        say = ""
+    pic = ""
+    if pose and say:
+        rds.set(f"jacob_nudes_last:{uid}", pose)
+        pic = HARUTO_NUDES[pose]
     if say:
         row = {"role": "user", "content": say, "speaker": "haruto", "aside": True}
         if pic:
@@ -3952,7 +4013,7 @@ async def harriet_reply_endpoint(data: dict):
         print(f"carol: booze scores {booze}")
         if booze and any(booze[k] > CAROL_BOOZE_THRESHOLDS[k] for k in booze):
             try:
-                accuse = await asyncio.to_thread(_one_off, FERNANDO_ACCUSES.format(text=text, said=say))
+                accuse = await asyncio.to_thread(carol_zinger, uid, text, say)
             except Exception as e:
                 print(f"carol: accusation failed: {e}")
             if accuse:
