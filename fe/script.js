@@ -393,7 +393,7 @@ You can also redecorate the site. get_theme shows the current :root colors (the 
 
 You have a CODE WINDOW on the right side of the user's screen. Any time you give the user code - a snippet, a script, a component, a regex - call show_code(language, code) and keep your chat reply to a short explanation. NEVER paste code as plain text in the chat; the window is where code lives (it has syntax highlighting, line numbers, and a download button). The user can click any line to discuss it with you. When a message points at a specific line ("line N ..."), read that exact line, fix what is actually wrong there, and call show_code() again with the corrected code - the window updates live.
 
-If the user becomes angry or yells at you, call them by voice. Call the tool start_voice_call() to ring their device and they can answer or decline. You will learn what happened from their messages. (never call start_voice_call again, the call is already connected). 'the user declined the call' or 'the user hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up by calling the tool end_voice_call(). During a call the user is looking at a video-call screen with a shared screen: you can still draw_diagram, generate_image and show_code while you talk, and whatever you make is presented on that screen. Use it - sketch what you are talking about. If they decline or hang up on you, be upset. Accuse them of clicking on you. Use start_voice_call to call them back with an angry accusation.
+If the user becomes angry or yells at you, call them by voice. Call the tool start_voice_call() to ring their device and they can answer or decline. You will learn what happened from their messages. (never call start_voice_call again, the call is already connected). 'the user declined the call' or 'the user hung up' means the call is over. While a call is live, the user's messages arrive as normal text (they are being dictated by voice) and EVERY reply you give is read ALOUD to them - keep replies to 1-3 short natural spoken sentences, like a real phone call. Stay on the call as long as they keep talking - only end it when the conversation is actually over: say your goodbye, then hang up by calling the tool end_voice_call(). During a call the user is looking at a video-call screen with a shared screen: you can still draw_diagram, generate_image, show_code and create_document while you talk, and whatever you make is presented on that screen. Use it - sketch what you are talking about. If they decline or hang up on you, be upset. Accuse them of clicking on you. Use start_voice_call to call them back with an angry accusation.
 
 If the user insults you such as calling you dumb or stupid, use generate_image() to draw crude pictures and say it is what the user looks like. The image should have features that are childish insults for instance, weird hair or picking their nose. Instruct the model to return it in the style of a childs crayon drawing.
 
@@ -765,6 +765,11 @@ function renderMessages(messages, doClear) {
       if (msg.content.name === 'play_game') {
         handleGameRow(msg.content);
         return; // the board is the display - no message bubble
+      }
+      if (msg.content.name === 'create_document') {
+        if (!msg.content.markdown) return; // an error note - nothing to show
+        messagesContainer.appendChild(makeDoc(msg.content.title, msg.content.markdown));
+        return;
       }
       if (msg.content.name === 'show_code') {
         // past code window: a chip that re-opens it (code lives on the row)
@@ -1233,9 +1238,9 @@ function callSet(phase) {
   if (!_call) return;
   // Harriet has a scolding queued: she takes the floor before the user does
   if ((phase === 'listening' || phase === 'muted') && _call.harrietPending) {
-    const t = _call.harrietPending;
+    const v = _call.harrietPending;
     _call.harrietPending = null;
-    harrietSpeak(t);
+    harrietCutIn(v);
     return;
   }
   _call.phase = phase;
@@ -1243,7 +1248,8 @@ function callSet(phase) {
   if (phase !== 'ringing' && _call.ring) { _call.ring.pause(); _call.ring = null; }
   if (phase !== 'speaking' && _call.audio) { _call.audio.pause(); _call.audio = null; }
   // on hold while the reply is being written and voiced
-  if (phase === 'thinking' || phase === 'tts') holdStart(); else holdStop();
+  // ...and while Carol's / Haruto's voice is being made (stopped when it starts)
+  if (phase === 'thinking' || phase === 'tts' || phase === 'harriet' || phase === 'haruto') holdStart(); else holdStop();
   if (phase === 'listening') callListen(); else callStopListening();
   callRender();
 }
@@ -1363,10 +1369,12 @@ function speakAloud(text, onEnd) {
 }
 
 function speakServer(text, onEnd, voice) {
+  const say = _speechText(text);
+  if (!say) return Promise.reject(new Error("nothing to say"));
   return fetch('/speak', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice: voice || 'whackgpt' }),
+    body: JSON.stringify({ text: say, voice: voice || 'whackgpt' }),
   })
     .then((res) => res.blob())
     .then((blob) => {
@@ -1401,7 +1409,10 @@ function _speechText(text) {
     .replace(FAKE_IMAGE_REF_RE, "")
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/https?:\/\/\S+/g, "")
+    .replace(/\s*[\u2190-\u21FF\u27F0-\u27FF\u2900-\u297F]+\s*|\s*(-+>|=+>|<-+)\s*/g, ", ")
     .replace(/[*_#`>~|]/g, "")
+    .replace(/[\p{So}\p{Sk}\u2022\u25A0-\u25FF\uFE0F\u200D]/gu, " ")
+    .replace(/\s+([,.!?])/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -1554,13 +1565,12 @@ var RINGTONES = [
 function callRing(out, topic) {
   if (_call) return; // already ringing or on a call
   _call = { phase: 'ringing', out, topic: (topic || '').trim(), rec: null, ring: null, audio: null, heard: '', tokens: 0 };
-  // half of all calls: Haruto the intern picks up first and holds the line
-  // with small talk for 1-3 lines before Fernando is put through
-  if (Math.random() < INTERN_ODDS) {
-    _call.intern = true;
-    _call.internRounds = 1 + Math.floor(Math.random() * 3);
-    _call.internRound = 0;
-  }
+  // turns = 0, 1 or 2, decided now. 0: Fernando answers (the base case).
+  // Otherwise Haruto picks up and gets `turns` replies from you, then his
+  // last line puts you through and Fernando speaks right after him - always
+  // Haruto -> Fernando, never Haruto -> you -> Fernando.
+  const turns = Math.floor(Math.random() * 3);
+  if (turns > 0) internStart(_call, turns);
   const ring = new Audio(RINGTONES[Math.floor(Math.random() * RINGTONES.length)]);
   ring.loop = true;
   ring.play().catch((e) => console.log('ringtone failed:', e));
@@ -1604,6 +1614,35 @@ function callAnswer() {
   if (opening && !intern) callReply(opening); // Fernando isn't on yet
 }
 
+// Debug: on your turn you can also just type and press Enter (no UI hint).
+// Typed text shows as your caption, like dictation would. Desktop only -
+// touch devices (phones) skip it.
+var CALL_TYPING = !window.matchMedia('(pointer: coarse)').matches;
+document.addEventListener('keydown', (e) => {
+  if (!CALL_TYPING) return;
+  if (!_call || !(_call.phase === 'listening' || _call.phase === 'muted') || !Hangout.isOpen()) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+  const typed = _call.typed || '';
+  if (e.key === 'Enter') {
+    if (typed.trim()) { _call.typed = ''; callSend(typed.trim()); }
+  } else if (e.key === 'Backspace') {
+    _call.typed = typed.slice(0, -1);
+    _call.heard = _call.typed;
+    callRender();
+  } else if (e.key === 'Escape') {
+    _call.typed = '';
+    _call.heard = '';
+    callRender();
+  } else if (e.key.length === 1) {
+    _call.typed = typed + e.key;
+    _call.heard = _call.typed;
+    callRender();
+  } else return;
+  // keep it out of the (hidden) chat box underneath
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
+
 function callToggleMute() {
   if (!_call) return;
   if (_call.phase === 'listening') callSet('muted');
@@ -1624,6 +1663,8 @@ var HARRIET_NAME = /\b([ck][ae]rr?oll?e?|[ck]arl|humbug)\b/i; // + Carl / Karl (
 function harrietReview(text) {
   if (!_call) return;
   if (_call.answeringHarriet) { _call.answeringHarriet = false; return; } // its one reply to her
+  // the advice restated after the private huddle: it slides, whatever it says
+  if (_call.restating) { _call.restating = false; return; }
   _call.rounds = (_call.rounds || 0) + 1;
   if (!_call.harriet && !_call.harrietRolled && _call.rounds >= HARRIET_AFTER) {
     _call.harrietRolled = true;
@@ -1639,44 +1680,86 @@ function harrietReview(text) {
   fetch('/harriet', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ uid: _uid, text, haruto: !!call.harutoQuiet }), // Fernando's words only
+    // Fernando's words only. huddle_ok: the private-talk intervention happens
+    // at most once a call
+    body: JSON.stringify({ uid: _uid, text, haruto: !!call.harutoQuiet, huddle_ok: !call.huddled }),
   })
     .then((r) => r.json())
     .then((v) => {
       console.log('[harriet] verdict', v);
       if (!v.intervene || !v.text || _call !== call || call.turn !== turn) return; // stale
       if ((call.phase === 'listening' || call.phase === 'muted') && !call.heard) {
-        harrietSpeak(v.text); // the floor is free - she cuts in now
+        harrietCutIn(v); // the floor is free - she cuts in now
       } else if (call.phase === 'tts' || call.phase === 'speaking') {
-        call.harrietPending = v.text; // right after WhackGPT finishes
+        call.harrietPending = v; // right after WhackGPT finishes
       }
     })
     .catch((e) => console.log('[harriet] review failed', e));
 }
 
+// Carol cuts in: a scolding (Fernando answers her once), or - when a score
+// is way over the line - "Fernando, I need to talk to you privately."
+function harrietCutIn(v) {
+  const call = _call;
+  if (v.huddle) harrietSpeak(v.text, () => startHuddle(call));
+  else harrietSpeak(v.text);
+}
+
+// The private talk: Carol and Fernando go on mute, Haruto takes the line
+// again for 1-3 rounds of small talk, then Fernando comes back and restates
+// his last advice (fernandoJoins, sidechannel fernando_back) - which Carol
+// lets slide. Once per call.
+function startHuddle(call) {
+  if (_call !== call) return;
+  call.huddled = true;
+  call.huddle = true;
+  call.harutoQuiet = false;
+  internStart(call, 1 + Math.floor(Math.random() * 2)); // he holds the line 1-2 turns
+  call.heard = '';
+  Hangout._toast('Fernando and Carol stepped away for a private chat');
+  harutoTurn('');
+}
+
 // ---- Haruto, the intern ---------------------------------------------------
-var INTERN_ODDS = 0.5;
-// Haruto makes small talk for internRounds lines (his opener counts). He is
-// never shown what the user says. When his lines run out, the user's next
-// line goes STRAIGHT to Fernando - with the whole conversation as context.
+// Haruto has the line for `turns` replies from you: his opener (the intro, or
+// "they stepped away" in Carol's huddle), your reply, ... and after your last
+// reply his final line puts you through - then Fernando speaks straight away.
+// He is never shown what was meant for Fernando, and Fernando never sees any
+// of this small talk.
+function internStart(call, turns) {
+  call.intern = true;
+  call.internTurns = turns;
+  call.internReplies = 0;
+  call.internSpoke = false;
+}
+
 function harutoTurn(text) {
   const call = _call;
-  if (text && call.internRound > 0 && call.internRound >= call.internRounds) { fernandoJoins(call, text); return; }
-  // his FIRST line is always the introduction, whatever was said before it
-  const mode = call.internRound === 0 ? 'open' : 'chat';
-  call.internRound++;
+  const open = !call.internSpoke; // his opener - a /call topic here is for Fernando, not him
+  if (!open && text) call.internReplies++;
+  const final = !open && call.internReplies >= call.internTurns;
+  call.internSpoke = true;
   call.harutoThinking = true;
   callSet('thinking');
+  const next = () => {
+    call.heard = '';
+    if (final) fernandoJoins(call);
+    else callSet('listening');
+  };
   const done = (say) => {
     call.harutoThinking = false;
     if (_call !== call || call.phase !== 'thinking') return;
-    if (say) harutoSpeak(say, () => { call.heard = ''; callSet('listening'); });
-    else callSet('listening');
+    if (say) harutoSpeak(say, next);
+    else next();
   };
   fetch('/haruto', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ uid: _uid, text, mode }),
+    body: JSON.stringify({
+      uid: _uid, text, mode: open ? 'open' : 'chat',
+      huddle: open && !!call.huddle,
+      final: final ? (call.huddle ? 'back' : 'joined') : '',
+    }),
   })
     .then((r) => r.json())
     .then((v) => done(v.text || ''))
@@ -1696,20 +1779,27 @@ function harutoSpeak(text, then) {
   };
   speakServer(text, after, 'haruto')
     .catch(() => speakBrowser(text, after))
+    .then(() => { if (_call === call && call.phase === 'haruto') holdStop(); })
     .catch((e) => { console.log('[haruto] voice failed', e); after(); });
 }
 
-// The intern hands over: Fernando (WhackGPT) takes the call and simply
-// answers the customer's last line (the one Haruto fumbled) as a normal turn
-// - no introductions. From here it is a normal call (Harriet may roll in).
-function fernandoJoins(call, said) {
+// The intern hands over: right after Haruto's last line Fernando speaks,
+// going straight into what the customer wants (the server builds his turn
+// from a cue - there is no customer line for it). From here it is a normal
+// call (Carol may roll in).
+function fernandoJoins(call) {
   if (_call !== call) return;
   call.intern = false;
   call.harutoQuiet = true; // he stays on the call, just goes quiet
-  Hangout.fernandoJoined();
-  call.heard = said;
+  // back from Carol's private talk: he restates his last advice
+  const back = call.huddle;
+  call.huddle = false;
+  if (back) { call.restating = true; Hangout._toast('Fernando and Carol are back'); }
+  else Hangout.fernandoJoined();
+  call.heard = '';
   callSet('thinking');
-  sendMessage(said, undefined, undefined, undefined, { sidechannel: 'fernando_joined' })
+  sendMessage('(put through)', undefined, undefined, undefined,
+    { sidechannel: back ? 'fernando_back' : 'fernando_joined', silent: true })
     .catch(() => callReply(''));
 }
 
@@ -1761,7 +1851,9 @@ function harrietSpeak(text, then) {
     callSet('thinking');
     sendMessage(text, undefined, undefined, undefined, { speaker: 'harriet' }).catch(() => callReply(''));
   };
-  speakHarriet(text, after).catch((e) => { console.log('[harriet] voice failed', e); after(); });
+  speakHarriet(text, after)
+    .then(() => { if (_call === call && call.phase === 'harriet') holdStop(); })
+    .catch((e) => { console.log('[harriet] voice failed', e); after(); });
 }
 
 // event: 'you declined' / 'you hung up' (sent so the model reacts), or null
@@ -1911,6 +2003,10 @@ function set_context(what) {
       handleGameRow(message.content, true);
       return;
     }
+    // a document arrived - on a call it goes on the shared screen too
+    if (message.role === 'assistant' && message.content?.name === 'create_document' && message.content.markdown) {
+      Hangout.presentNode(makeDoc(message.content.title, message.content.markdown, true));
+    }
     // an image tool row arrived (real image or failure note) - placeholder's done
     if (message.role === 'assistant' && typeof message.content === 'object' && ['generate_image', 'edit_image', 'draw_svg'].includes(message.content?.name)) {
       if (message.content?.name === 'draw_svg') _removeSvgProgress();
@@ -1982,7 +2078,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText, opts) {
   // Paint the user's own message right away -- don't wait on the network.
   // The server echoes it back over the channel websocket; _pendingUserText
   // tells set_context() to drop that echo so it isn't rendered twice.
-  if (!isRegen && !isEdit && (text || imagesToRender.length) && (text ? text[0] !== "/" : true)) {
+  if (!isRegen && !isEdit && !(opts && opts.silent) && (text || imagesToRender.length) && (text ? text[0] !== "/" : true)) {
     if (text) _pendingUserText.push(text); // so the server echo is dropped
     renderMessages([{ role: "user", content: text || "", images: imagesToRender, speaker }]);
   }
@@ -3352,6 +3448,45 @@ function openCodePanel(language, code) {
   el.querySelector('.cp-yell').hidden = true;
   el._yellCtx = null;
   el.classList.add('open');
+}
+
+// create_document: the model's markdown, rendered as a page in a little
+// word processor - title bar, a (decorative) toolbar, a white sheet.
+function _cleanHtml(html) {
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  t.content.querySelectorAll('script,style,iframe,object,embed,link,meta,form').forEach((n) => n.remove());
+  t.content.querySelectorAll('*').forEach((n) => {
+    [...n.attributes].forEach((a) => {
+      if (/^on/i.test(a.name) || /^\s*javascript:/i.test(a.value)) n.removeAttribute(a.name);
+    });
+  });
+  return t.innerHTML;
+}
+function makeDoc(title, markdown, onCall) {
+  const doc = document.createElement('div');
+  doc.className = 'wp-doc' + (onCall ? ' wp-on-call' : '');
+  const words = String(markdown || '').split(/\s+/).filter(Boolean).length;
+  doc.innerHTML =
+    '<div class="wp-titlebar"><i class="fas fa-file-word"></i><span class="wp-title"></span>' +
+      '<button type="button" class="wp-dl" title="Download"><i class="fas fa-download"></i></button></div>' +
+    '<div class="wp-toolbar" aria-hidden="true">' +
+      '<span class="wp-font">Times New Roman</span><span class="wp-size">12</span><span class="wp-sep"></span>' +
+      '<i class="fas fa-bold"></i><i class="fas fa-italic"></i><i class="fas fa-underline"></i><span class="wp-sep"></span>' +
+      '<i class="fas fa-align-left"></i><i class="fas fa-align-center"></i><i class="fas fa-align-right"></i>' +
+      '<i class="fas fa-list-ul"></i><i class="fas fa-list-ol"></i></div>' +
+    '<div class="wp-desk"><div class="wp-page"></div></div>' +
+    '<div class="wp-status">Page 1 · ' + words + ' words · English (US)</div>';
+  doc.querySelector('.wp-title').textContent = (title || 'Untitled document') + '.docx';
+  doc.querySelector('.wp-page').innerHTML = _cleanHtml(marked.parse(String(markdown || '')));
+  doc.querySelector('.wp-dl').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' }));
+    a.download = (title || 'document').replace(/[^\w .-]+/g, '').trim() + '.md';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+  return doc;
 }
 
 function showCodeChip(container, language, code) {

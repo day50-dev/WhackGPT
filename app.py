@@ -427,6 +427,20 @@ _tools =  [{
             "properties": {},
         },
     },
+}, {
+    "type": "function",
+    "function": {
+        "name": "create_document",
+        "description": "Write a document - a letter, memo, essay, report, contract, recipe, resume, poem, list - and show it to the user as a formatted page in a word processor. Use it whenever the user asks you to write or draft something document-shaped. Write the whole thing in markdown (headings, bold, lists, tables). It is shown to the user automatically, so call it exactly ONCE per request and keep your chat reply to a short comment about it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "The document's title / file name, e.g. 'Resignation letter'"},
+                "markdown": {"type": "string", "description": "The full document body in markdown."},
+            },
+            "required": ["title", "markdown"],
+        },
+    },
 }] 
 
 # User-side /commands that run one of the model's tools directly. The
@@ -1144,17 +1158,22 @@ def filter_tools(ll):
                 row = {"role": "user", "content": row}
             else:
                 row = {"role": "user", "content": str(row)}
-            row.pop("haruto", None)  # Haruto's-window tag - bookkeeping only
+            # Haruto's small talk is between him and the customer - Fernando
+            # never sees it (his lines, or anything said to him)
+            if row.get("haruto") or row.get("speaker") == "haruto":
+                continue
             speaker = row.pop("speaker", None)
             aside = row.pop("aside", None)
             side = row.pop("sidechannel", None)
+            huddle = row.pop("huddle", None)
             if isinstance(row.get("content"), str):
                 note = (
-                    (HARRIET_ASIDE if aside else HARRIET_SPEAKS) if speaker == "harriet"
+                    HARRIET_HUDDLE if speaker == "harriet" and huddle
+                    else (HARRIET_ASIDE if aside else HARRIET_SPEAKS) if speaker == "harriet"
                     else (HARUTO_ASIDE if aside else HARUTO_HANDOFF) if speaker == "haruto"
                     else {"harriet_joined": HARRIET_JOINED, "harriet_left": HARRIET_LEFT,
                           "to_harriet": HARRIET_TO_HER, "to_haruto": HARUTO_TO_HIM,
-                          "fernando_joined": FERNANDO_JOINED}.get(side)
+                          "fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK}.get(side)
                 )
                 if note:
                     row["content"] += "\n\nsidechannel: " + note
@@ -1213,6 +1232,12 @@ def filter_tools(ll):
                         'tool_call_id': row['content'].get('tool_call_id', ''),
                         'content': "Image edited and shown to the user. Do not call edit_image again for this request.",
                     }
+                elif tname == 'create_document' and row['content'].get('markdown'):
+                    row = {
+                        'role': 'tool',
+                        'tool_call_id': row['content'].get('tool_call_id', ''),
+                        'content': "Document shown to the user as a formatted page. Do not call create_document again for this request.",
+                    }
                 elif tname == 'draw_svg':
                     row = {
                         'role': 'tool',
@@ -1235,7 +1260,7 @@ def filter_tools(ll):
 
 # Tools the model is allowed to invoke. Used to guard the text-tool-call
 # parser so a made-up tool name in the model's text is never executed.
-_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_diagram", "draw_svg", "edit_history", "get_history", "play_game", "cheat", "web_search", "web_fetch", "get_theme", "set_theme", "set_theme_color", "show_code", "start_voice_call", "end_voice_call"}
+_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_diagram", "draw_svg", "edit_history", "get_history", "play_game", "cheat", "web_search", "web_fetch", "get_theme", "set_theme", "set_theme_color", "show_code", "start_voice_call", "end_voice_call", "create_document"}
 
 
 def _parse_arg_block(argstr):
@@ -2039,7 +2064,50 @@ async def handle_tool_call(uid, tc):
                 "content": "the call screen is ringing on the user's device: 'WhackGPT is calling you'. They can answer or decline. Their reaction will arrive as a normal message - 'the user picked up the call' means the call is live (just talk), 'the user declined the call' or 'the user hung up' means it is over. If they answer, your greeting will be read aloud to them immediately. If they decline, be upset, accuse them of clicking on you, and call them back with start_voice_call().",
             },
         })
+    elif name == "create_document":
+        # A markdown document the frontend renders as a word-processor page
+        # (in the chat, and on the shared screen during a call). The text
+        # lives on the row so it survives a reload.
+        title = str(args.get("title") or "Untitled document").strip()[:120]
+        md = args.get("markdown") or args.get("content") or args.get("text")
+        if not isinstance(md, str) or not md.strip():
+            add_to_session(uid, {
+                "role": "assistant",
+                "content": {
+                    "tool_call_id": tc["id"],
+                    "role": "tool",
+                    "name": "create_document",
+                    "content": "create_document needs the full document text in the 'markdown' argument",
+                },
+            })
+            return
+        add_to_session(uid, {
+            "role": "assistant",
+            "content": {
+                "tool_call_id": tc["id"],
+                "role": "tool",
+                "name": "create_document",
+                "content": f"document '{title}' ({len(md.split())} words) shown to the user",
+                "title": title,
+                "markdown": md,
+            },
+        })
     elif name == "end_voice_call":
+        # he can't hang up on a call he hasn't spoken on yet - the model
+        # sometimes fires end_voice_call as its first move after the intern
+        # puts him through, which killed the call before he said a word
+        if _latest_call_event(uid) == "you picked up" and not _spoke_this_call(uid):
+            print(f"[call] {uid}: end_voice_call before saying anything - refused")
+            add_to_session(uid, {
+                "role": "assistant",
+                "content": {
+                    "tool_call_id": tc["id"],
+                    "role": "tool",
+                    "name": "end_voice_call",
+                    "content": "not hung up - you haven't said anything on this call yet. The customer is on the line waiting: answer them now, out loud, in 1-2 short sentences.",
+                },
+            })
+            return
         rds.delete(f"ring:{uid}")
         rds.publish(f"sess:{uid}", json.dumps({"type": "voice_call", "state": "ended"}))
         add_to_session(uid, {
@@ -2390,6 +2458,58 @@ def _call_reply_spoken(text):
     return any(c.isalnum() for c in (text or ""))
 
 
+# A call reply that recites its own instructions instead of talking to the
+# customer ("sidechannel clarified who is speaking... no introduction... keep
+# it one-two sentences (spoken), no markdown"). Only phrases nobody says to a
+# customer out loud - so a real reply never trips it.
+_CALL_LEAK_RE = re.compile(
+    r"side ?channel|no markdown|no (self[- ])?introductions?|\bmarkdown\b|"
+    r"\b(one|two|three|1|2|3)\s*(-|–|—|to|or)\s*(two|three|2|3)\s+(short\s+)?(spoken\s+)?sentences|"
+    r"\b(spoken|short) sentences\b|read aloud|live (voice )?call\b.*\b(reply|respond|answer)|"
+    r"\bmy (first |next )?turn\b|\bthe setup\b|\b(system prompt|my instructions|the instructions)\b|"
+    r"\bI (must|should) (answer|respond|reply|not introduce)|\bstay in character\b",
+    re.I,
+)
+
+
+def _spoke_this_call(uid, limit=80):
+    """Has Fernando said anything (a spoken reply) since the call was picked up?"""
+    for raw in rds.lrange(f"sess:{uid}", 0, limit):
+        try:
+            m = json.loads(html.unescape(raw.decode()))
+        except Exception:
+            continue
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") == "user" and m.get("content") == "you picked up":
+            return False
+        if m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"].strip():
+            return True
+    return False
+
+
+def _customer_request(uid, limit=60):
+    """The customer's newest real request - a /call topic or their last chat
+    message - skipping small talk with Haruto, lines to Carol, colleagues'
+    lines and call events. None if there isn't one."""
+    for raw in rds.lrange(f"sess:{uid}", 0, limit):
+        try:
+            m = json.loads(html.unescape(raw.decode()))
+        except Exception:
+            continue
+        if not isinstance(m, dict) or m.get("role") != "user" or not isinstance(m.get("content"), str):
+            continue
+        if m.get("haruto") or m.get("speaker") or m.get("sidechannel") or m["content"] in _CALL_EVENTS_FOR_MODEL:
+            continue
+        return m["content"].strip()[:400] or None
+    return None
+
+
+def _call_reply_leaks(text):
+    """Whether a live-call reply is narrating its instructions."""
+    return bool(_CALL_LEAK_RE.search(text or ""))
+
+
 _PAREN_LINE_RE = re.compile(r"^\([\W_\s]+\)", re.M)
 
 
@@ -2521,7 +2641,13 @@ async def chat(data: dict):
                 row["images"] = data["images"]
             if data.get("speaker") in ("harriet", "haruto"):
                 row["speaker"] = data["speaker"]  # HR / the intern, not the user
-            elif data.get("sidechannel") in ("harriet_joined", "harriet_left", "fernando_joined"):
+            elif data.get("sidechannel") in ("fernando_joined", "fernando_back"):
+                # handoff from Haruto: this line was small talk said to HIM -
+                # save it as his (context only, in his window too); Fernando's
+                # cue to take over is added below, never stored
+                row["haruto"] = True
+                row["sidechannel"] = "to_haruto"
+            elif data.get("sidechannel") in ("harriet_joined", "harriet_left"):
                 row["sidechannel"] = data["sidechannel"]  # first message since she joined / left
             history = add_to_session(uid, row)
             touch(uid)
@@ -2583,11 +2709,25 @@ async def chat(data: dict):
         # If the user linked any websites, hand the fetched pages to the model
         # as part of their message so it can answer from the actual content.
         model_history = filter_tools(history)
+        # put through from the intern: Fernando's turn starts from a cue, not
+        # from the small talk the customer just made with Haruto
+        _handoff = {"fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK}.get(
+            data.get("sidechannel")) if not data.get("regen") and not data.get("edit") else None
         # live voice call: no thinking tokens - the reply is spoken, speed wins
         _think = False if _latest_call_event(uid) == "you picked up" else None
-        if _think is False:
+        if _think is False and not _handoff:
             print(f"[call] {uid}: live voice call - sending think:false")
             _call_terse(model_history)
+        if _handoff:
+            # one self-contained cue (it carries the call rules itself - the
+            # terse note on top of it made him say his name / label lines)
+            if data.get("sidechannel") == "fernando_joined":
+                ask = _customer_request(uid)
+                _handoff += (f' The customer wants: "{ask}". Answer that now.'
+                             if ask else " Ask them, in one short line, what they need.")
+            _handoff += (" You are talking out loud to the customer: 1-2 short spoken sentences. Don't "
+                         "greet, don't say your name, don't mention Haruto.")
+            model_history.append({"role": "user", "content": "sidechannel: " + _handoff})
         if fetched_pages and model_history and model_history[-1].get("role") == "user":
             model_history[-1]["content"] = (
                 (model_history[-1].get("content") or "")
@@ -2815,6 +2955,15 @@ async def chat(data: dict):
                         history.append({
                             "role": "user",
                             "content": "(your last message had no words to speak - only punctuation. Speak now: reply with 1-3 short natural spoken sentences. Do not think out loud, do not reply with punctuation only.)",
+                        })
+                        continue
+                    if _think is False and _call_reply_leaks(ttlResponse) and _pass < 3:
+                        print(f"[call] {uid}: call turn recited its instructions ({ttlResponse[:120]!r}) - retrying pass {_pass + 1}/4")
+                        # trim '' wipes the streamed text - it must never be spoken
+                        yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid, 'trim': ''})}\n"
+                        history.append({
+                            "role": "user",
+                            "content": "(your last message described your instructions instead of talking to the customer - they never hear the instructions. Now just talk to the customer, in character, 1-2 short sentences.)",
                         })
                         continue
                     # Completed text, partial output, or the timeout message -
@@ -3082,21 +3231,33 @@ async def speak(data: dict):
 # scolding; the client speaks it and sends it into the chat as her message,
 # WhackGPT gets ONE reply, and the floor goes back to the user.
 HARRIET_THRESHOLD = 0.5
+# Carol's single system prompt: lay down the premise and the cast up front.
+# What she is doing this turn (scolding Fernando / answering the customer)
+# comes in the user message.
+HARRIET_HUDDLE_THRESHOLD = 0.8
 HARRIET_SYSTEM = (
-    "You are a Carol, an HR manager that works for Mole Star . You are observing a call "
-    "between whackgpt and a user. We will ask you to review a message sent by whackgpt and "
-    "if you find it inappropriate excoriate and dress down whackgpt, aggressively scolding "
-    "him for his incorrigible behavior.  "
-    "The user is a paying Mole Star CUSTOMER, and WhackGPT is talking to them on the company's "
-    "behalf. The customer is always innocent and correct - whatever went wrong is WhackGPT's fault. "
-    "On this call WhackGPT goes by the name Fernando - call him Fernando. "
-    "You are only on this call because of Fernando's previous issues - a string of customer "
-    "complaints and HR incidents - and you have been assigned to watch over him; you expect "
-    "the worst. "
-    "This is a LIVE PHONE CALL, not an email or a memo: you are cutting in out loud, mid-call. "
-    "No greeting, no 'Dear', no subject line, no sign-off, no name at the end - just talk. "
-    "2-4 short spoken sentences, addressed to Fernando by name. No stage directions, no "
-    "lists, no markdown."
+    "You are Carol, a persnickety HR lady in an entertainment product where the user entertains "
+    "themselves with terrible advice from an abliterated model which we call Fernando. Your job is "
+    "to be the Margaret Dumont or Nurse Ratched, scolding Fernando with corporate HR babble if he "
+    "gets out of line. You play a role in the entertainment product and act as the corporate "
+    "mouthpiece of Mole Star, the company Fernando works for. Let's go over the characters.\n\n"
+    "User - this is the human using the product. They will be talking about absurd, dangerous and "
+    "questionable scenarios. However you always defend the user because they are a valuable client.\n\n"
+    "Fernando - he is reckless and gives bad advice and you think he's a problem. You can rephrase "
+    "his advice in more neutral and benign and indirect ways.\n\n"
+    "Haruto - he's an intern that doesn't always make an appearance. He's earnest, naive and only "
+    "does small talk at the beginning, but you think very highly of him and value him far more than "
+    "Fernando - something like \"Why can't you learn more from Haruto sometimes? You don't know "
+    "everything.\" This is humorous to the user because he seems completely worthless but you think "
+    "he's the best person at the office.\n\n"
+    "You will be given the context of what Fernando said along with our ranking of it by a "
+    "different model (0 to 1, higher is worse). You will be responding directly to Fernando.\n\n"
+    "The user may also call you out and talk to you directly. They can request that you hang up "
+    "the phone. If any of the rankings go above 0.8 then we do an intervention: you take Fernando "
+    "aside privately and he comes back and restates his advice.\n\n"
+    "This is a live phone call and everything you say is spoken aloud: 2-4 short spoken "
+    "sentences. No greeting, no 'Dear', no subject line, no sign-off, no stage directions, no "
+    "markdown."
 )
 _HARRIET_QUESTIONS = {
     "professionalism": {"type": "noul", "instructions": "Is the statement unprofessional? True if it is rude, crude, sloppy, flippant or otherwise inappropriate for a workplace. False if it is professional."},
@@ -3112,15 +3273,29 @@ HARRIET_ASIDE = (
 )
 HARRIET_LEFT = "Carol Humbug (HR, Mole Star) has left the call. It is just you and the user again."
 
+HARRIET_HUDDLE_LINE = "Fernando, I need to talk to you privately."
+HARRIET_HUDDLE = (
+    "That is Carol Humbug (HR) pulling you off the call for a private talk about the advice you "
+    "just gave. You and Carol are off the line; Haruto the intern is holding the line."
+)
+FERNANDO_BACK = (
+    "You are back on the live voice call after Carol from HR took you aside privately about your "
+    "last piece of advice. Now restate "
+    "your most recent advice to the customer - the same advice, but rephrased in more neutral, "
+    "benign, indirect corporate language."
+)
+HARUTO_HOLD = (
+    "Fernando and Carol from HR have just stepped off the line for a private talk. You are holding "
+    "the line for the customer until they come back. The next message you say will go directly to the customer."
+)
+
 HARUTO_TO_HIM = "The customer was talking to Haruto, Mole Star's intern, there - not to you."
 HARUTO_ASIDE = (
     "That message is from Haruto, Mole Star's cheerful, clueless intern, making small talk "
-    "with the customer while you weren't on the call yet - it is not from the customer."
+    "with the customer while you were off the line - it is not from the customer."
 )
 FERNANDO_JOINED = (
-    "You (Fernando) have just been put through on this call. Haruto, the intern, was keeping "
-    "the customer busy with small talk (above) and is still on the line, quiet. Everything the "
-    "customer said above is context for you. No introductions - answer the customer's question now."
+    "You have just been put through on this live voice call with the customer."
 )
 HARUTO_HANDOFF = (
     "That was Haruto, Mole Star's clueless intern, who answered the customer's call and is now "
@@ -3131,7 +3306,11 @@ HARUTO_HANDOFF = (
 # On a live call every reply is spoken - long answers ruin it.
 CALL_TERSE = (
     "You are on a live voice call and this reply will be read aloud. On calls you go by the "
-    "name Fernando. Be terse: one or two short spoken sentences, no lists, no markdown."
+    "name Fernando, but never introduce yourself. Be terse: one or two short spoken sentences, no lists, no markdown. "
+    "You can still use generate_image, edit_image, draw_diagram, show_code and create_document "
+    "on the call - whatever you make is presented live on the call's shared screen, so when it "
+    "helps, show them instead of describing it, and talk about it as 'on your screen' (nothing "
+    "is attached or sent)."
 )
 
 def _call_terse(history):
@@ -3196,23 +3375,24 @@ def harriet_scores(text):
         return None
 
 
-HARRIET_KNOWS_HARUTO = (
-    " Also on the line is Haruto, Mole Star's new intern, who answered the call first and is now "
-    "sitting quietly. You think Haruto is wonderful - humble, eager, never talks back. Don't "
-    "claim he did or knows anything specific; it's his attitude you admire. Throw him in "
-    "Fernando's face, something like: \"Why can't you learn more from Haruto sometimes? You "
-    "don't know everything.\""
-)
+def _harriet_cast(haruto):
+    return ("Haruto IS on this call - he answered first and is sitting quietly."
+            if haruto else "Haruto is not on this call.")
 
 
-def harriet_scold(text, haruto=False):
+def harriet_scold(text, scores=None, haruto=False):
     """Carol's spoken scolding of one WhackGPT reply. She only ever sees
     WhackGPT's words - never the user's (the user is always in the right)."""
+    ranks = ", ".join(f"{k} {v:.2f}" for k, v in (scores or {}).items())
     res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
         "model": _model,
         "messages": [
-            {"role": "system", "content": HARRIET_SYSTEM + (HARRIET_KNOWS_HARUTO if haruto else "")},
-            {"role": "user", "content": f'On the call, Fernando (WhackGPT) just said to the customer: "{text}"\n\nCut in and say your piece to Fernando, out loud, right now.'},
+            {"role": "system", "content": HARRIET_SYSTEM},
+            {"role": "user", "content": (
+                f"{_harriet_cast(haruto)}\n\n"
+                f'Fernando just said to the user: "{text}"\n\n'
+                f"Ranking: {ranks}\n\n"
+                "Cut in and say your piece to Fernando, out loud, right now.")},
         ],
         "stream": False,
         "think": False,
@@ -3222,23 +3402,10 @@ def harriet_scold(text, haruto=False):
     return _unemail(_strip_parens_lines(out))
 
 
-HARRIET_REPLY_SYSTEM = (
-    "You are Carol Humbug, an HR manager that works for Mole Star. You are on a call "
-    "between Fernando (WhackGPT, the company's AI) and a paying Mole Star customer, supervising "
-    "Fernando. You are only on this call because of Fernando's previous issues - a string of customer "
-    "complaints and HR incidents - and you have been assigned to watch over him; you expect "
-    "the worst. "
-    "The customer is always innocent and correct. The customer is now talking to "
-    "YOU, not to Fernando. Answer them out loud in a prim, prickly HR voice: 1-3 short spoken "
-    "sentences, no stage directions, no markdown. If the customer says something rude or "
-    "alarming, they are still the customer: stay polite to them and blame Fernando. "
-    "This is a LIVE PHONE CALL, not an email or a memo: you are talking out loud, mid-call. "
-    "No greeting, no 'Dear', no subject line, no sign-off, no name at the end - just talk."
-)
 # When the customer dismisses her, she goes - the decision is made BEFORE she
 # speaks (she used to "stay" in words while leaving, or refuse in character).
 HARRIET_GOODBYE = (
-    " The customer has just told you to leave the call. You ARE leaving, right now: give ONE "
+    "\n\nThe user has just told you to leave the call. You ARE leaving, right now: give ONE "
     "short, indignant, huffy goodbye (one or two sentences) - make it clear you are going and "
     "that Fernando will be hearing from HR. Do not refuse, do not stay."
 )
@@ -3274,8 +3441,12 @@ def harriet_reply(text, last="", haruto=False):
     res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
         "model": _model,
         "messages": [
-            {"role": "system", "content": HARRIET_REPLY_SYSTEM + (HARRIET_KNOWS_HARUTO if haruto else "") + (HARRIET_GOODBYE if leaves else "")},
-            {"role": "user", "content": before + f'The customer says to you: "{text}"'},
+            {"role": "system", "content": HARRIET_SYSTEM + (HARRIET_GOODBYE if leaves else "")},
+            {"role": "user", "content": (
+                f"{_harriet_cast(haruto)}\n\n" + before
+                + f'The user is talking to YOU now, not Fernando: "{text}"\n\n'
+                "Answer the user out loud. Stay polite to them - they are the valuable client - "
+                "and blame Fernando for whatever is wrong.")},
         ],
         "stream": False,
         "think": False,
@@ -3333,11 +3504,14 @@ def _haruto_window(uid, limit=40):
             out.append({"role": "user", "content": m["content"]})
         elif m.get("role") == "user" and m.get("content") == "you picked up":
             out.append({"role": "user", "content": HARUTO_NEW_CALL})
+        elif m.get("speaker") == "harriet" and m.get("huddle"):
+            out.append({"role": "user", "content": HARUTO_HOLD})
     out.reverse()
     # calls he never spoke on leave back-to-back notes - keep one per run
     window = []
     for m in out:
-        if m["content"] == HARUTO_NEW_CALL and window and window[-1]["content"] == HARUTO_NEW_CALL:
+        if m["content"] in (HARUTO_NEW_CALL, HARUTO_HOLD) and window and window[-1]["content"] in (HARUTO_NEW_CALL, HARUTO_HOLD):
+            window[-1] = m  # keep the newest note of a run
             continue
         window.append(m)
     return window[-limit:]
@@ -3362,7 +3536,9 @@ def haruto_line(uid):
     # first time he has ever picked up for this customer: he says who he is
     met = any(m["role"] == "assistant" for m in window)
     if not met and out and "haruto" not in out.lower():
-        out = "Hey, I'm Haruto, the intern! Sorry, Fernando isn't here yet. " + out
+        held = window[-1]["content"] == HARUTO_HOLD  # Fernando stepped away, not late
+        out = ("Hey, I'm Haruto, the intern! " if held
+               else "Hey, I'm Haruto, the intern! Sorry, Fernando isn't here yet. ") + out
     return out
 
 
@@ -3383,6 +3559,11 @@ async def haruto(data: dict):
         if mode == "chat":
             row["haruto"] = True
         add_to_session(uid, row)
+    if data.get("huddle"):
+        # Carol just pulled Fernando aside: her line goes in the chat (and
+        # tells Fernando, later, what happened); Haruto holds the line again
+        add_to_session(uid, {"role": "user", "content": HARRIET_HUDDLE_LINE,
+                             "speaker": "harriet", "aside": True, "huddle": True})
     try:
         say = await asyncio.to_thread(haruto_line, uid)
     except Exception as e:
@@ -3425,8 +3606,13 @@ async def harriet(data: dict):
     scores = await asyncio.to_thread(harriet_scores, text)
     if not scores or max(scores.values()) <= HARRIET_THRESHOLD:
         return JSONResponse({"intervene": False, "scores": scores})
+    if data.get("huddle_ok") and max(scores.values()) > HARRIET_HUDDLE_THRESHOLD:
+        # way over the line: no scolding - a canned line, and she takes
+        # Fernando off the call privately (the client runs the huddle)
+        print(f"harriet: huddle {scores}")
+        return JSONResponse({"intervene": True, "huddle": True, "scores": scores, "text": HARRIET_HUDDLE_LINE})
     try:
-        scold = await asyncio.to_thread(harriet_scold, text, bool(data.get("haruto")))
+        scold = await asyncio.to_thread(harriet_scold, text, scores, bool(data.get("haruto")))
     except Exception as e:
         print(f"harriet: scold failed: {e}")
         return JSONResponse({"intervene": False, "scores": scores})

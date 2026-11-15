@@ -310,3 +310,110 @@
 /* with Haruto top-left and/or Harriet bottom-left, Fernando's name label goes top-right */
 .ho.haruto-quiet:not(.presenting) .ho-ai > .ho-name,
 .ho.harriet-here:not(.presenting) .ho-ai > .ho-name { top: 10px; bottom: auto; left: auto; right: 12px; }
+
+/* ---- create_document: a page in a little word processor ---- */
+.wp-doc {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 720px);
+  margin: 8px 0;
+  border: 1px solid #c8ccd2;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #e8eaed;
+  color: #202124;
+  font-family: system-ui, sans-serif;
+}
+.wp-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #2b579a;
+  color: #fff;
+  font-size: 13px;
+}
+.wp-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wp-dl { background: none; border: 0; color: #fff; cursor: pointer; font-size: 13px; padding: 2px 4px; }
+.wp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 10px;
+  background: #f3f3f3;
+  border-bottom: 1px solid #d0d0d0;
+  color: #444;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.wp-font, .wp-size { border: 1px solid #ccc; background: #fff; padding: 1px 6px; border-radius: 2px; }
+.wp-sep { width: 1px; height: 14px; background: #ccc; }
+.wp-desk { padding: 16px; overflow: auto; max-height: 520px; }
+.wp-page {
+  background: #fff;
+  max-width: 8.5in;
+  margin: 0 auto;
+  padding: 48px 56px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  font: 15px/1.55 "Times New Roman", Times, Georgia, serif;
+  color: #111;
+}
+.wp-page h1, .wp-page h2, .wp-page h3 { font-family: Calibri, Carlito, "Segoe UI", sans-serif; color: #1f3864; margin: 0.8em 0 0.4em; }
+.wp-page h1 { font-size: 24px; } .wp-page h2 { font-size: 19px; } .wp-page h3 { font-size: 16px; }
+.wp-page p { margin: 0 0 0.8em; }
+.wp-page table { border-collapse: collapse; margin: 0.6em 0; }
+.wp-page th, .wp-page td { border: 1px solid #999; padding: 4px 8px; }
+.wp-page a { color: #0563c1; }
+.wp-page img { max-width: 100%; }
+.wp-status { padding: 3px 10px; background: #2b579a; color: #dfe6f3; font-size: 11px; }
+@media (max-width: 600px) {
+  .wp-page { padding: 24px 20px; font-size: 14px; }
+  .wp-desk { padding: 8px; }
+}
+/* on the call's shared screen the document fills the presenting area */
+.ho-present-body:has(.wp-doc) { align-items: stretch; justify-content: center; padding: 0; }
+.wp-doc.wp-on-call { width: 100%; max-width: none; margin: 0; border: 0; border-radius: 0; }
+.wp-doc.wp-on-call .wp-desk { flex: 1; max-height: none; min-height: 0; }
+/* keep the app's global text/table styling off the page */
+.wp-page :is(p, li, td, th, blockquote, span, strong, em) { font-family: "Times New Roman", Times, Georgia, serif; color: #111; }
+.wp-page table { box-shadow: none !important; border-radius: 0 !important; overflow: visible; background: #fff; }
+
+/* the private huddle: Fernando and Carol are muted and dimmed, Haruto has the line */
+.ho-fern {
+  left: 12px;
+  top: 12px;
+  width: var(--ho-pip-w);
+  aspect-ratio: 4 / 3;
+  background: #5f6368;
+  z-index: 2;
+  display: none;
+}
+.ho-fern .ho-name { white-space: nowrap; }
+.ho.huddle .ho-fern { display: flex; animation: ho-join 0.5s ease-out; }
+.ho-fern .ho-face { width: auto; height: 62%; }
+.ho.huddle .ho-fern .ho-face,
+.ho.huddle .ho-harriet .ho-face { opacity: 0.4; filter: grayscale(0.7); }
+.ho-fern .ho-mic { color: var(--ho-red); }
+.ho.huddle .ho-harriet .ho-mic::before { content: "\f131"; color: var(--ho-red); }
+.ho.huddle .ho-toast { top: calc(var(--ho-pip-w) * 0.75 + 24px); }
+.ho.huddle:not(.presenting) .ho-ai > .ho-name { top: 10px; bottom: auto; left: auto; right: 12px; }
+
+/* the forgotten browser tab Fernando's screen share opens on */
+.ho-present-body:has(.ho-browser) { padding: 0; align-items: stretch; justify-content: stretch; }
+.ho-browser { flex: 1; display: flex; flex-direction: column; background: #dee1e6; min-width: 0; }
+.ho-br-tabs { display: flex; align-items: flex-end; gap: 8px; padding: 6px 8px 0; color: #5f6368; font-size: 11px; }
+.ho-br-tab {
+  display: flex; align-items: center; gap: 8px; max-width: 70%;
+  padding: 6px 10px; background: #fff; border-radius: 8px 8px 0 0; color: #202124;
+}
+.ho-br-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ho-br-bar { display: flex; align-items: center; gap: 10px; padding: 5px 8px; background: #fff; color: #5f6368; font-size: 12px; }
+.ho-br-url {
+  flex: 1; min-width: 0; padding: 4px 10px; border-radius: 14px; background: #f1f3f4; color: #202124;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ho-br-url .fa-lock { color: #5f6368; font-size: 10px; }
+.ho-br-view { flex: 1; min-height: 0; overflow: hidden; background: #fff; position: relative; }
+.ho-br-page { width: 1280px; height: 800px; transform-origin: 0 0; }
+.ho-br-page img, .ho-br-page iframe { width: 1280px; height: 800px; border: 0; display: block; object-fit: cover; object-position: top left; }

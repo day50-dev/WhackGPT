@@ -16,6 +16,84 @@
 var Hangout = (function () {
   let root = null, open = false, startedAt = 0, timer = null;
 
+  // When Fernando starts screen sharing, some of the time the share opens on
+  // the browser tab he forgot to close - Indeed, Kalshi, or worse:
+  // robot porn (BoardHub, a Raspberry Pi as the "BWC-2005"; source in
+  // fe/sites/src/) - before it cuts over to what he actually made. Real
+  // sites refuse to be framed, so they are all screenshots (fe/sites/).
+  const OOPS_ODDS = 0.8, OOPS_MS = 4000;
+  const OOPS_SITES = [
+    { title: "Now Hiring: 800 Ai Assistant Jobs | Indeed", url: "indeed.com/q-ai-assistant-jobs.html", img: "sites/indeed.jpg" },
+    { title: "Kalshi - Prediction Market for Trading the Future", url: "kalshi.com", img: "sites/kalshi.jpg" },
+  ];
+  const XXX_SITES = [
+    { title: "BWC-2005 — Fully Exposed, No Case, All 40 Pins | BoardHub", url: "boardhub.xxx/watch/bwc-2005", img: "sites/xxx-sbc.jpg" },
+  ];
+  let oopsTimer = null, oopsQueued = null, oopsLast = null;
+
+  // every site equally likely (never the same one twice in a row)
+  function oopsSite() {
+    const pool = OOPS_SITES.concat(XXX_SITES).filter((x) => x !== oopsLast);
+    return (oopsLast = pool[Math.floor(Math.random() * pool.length)]);
+  }
+
+  // a browser window: a tab, an address bar, and the page (1280x800, scaled
+  // to fit the presenting area)
+  function showSite(b, site) {
+    b.innerHTML =
+      '<div class="ho-browser">' +
+        '<div class="ho-br-tabs"><div class="ho-br-tab"><span></span><i class="fas fa-xmark"></i></div><i class="fas fa-plus"></i></div>' +
+        '<div class="ho-br-bar"><i class="fas fa-arrow-left"></i><i class="fas fa-arrow-right"></i><i class="fas fa-rotate-right"></i>' +
+          '<div class="ho-br-url"><i class="fas fa-lock"></i> <span></span></div></div>' +
+        '<div class="ho-br-view"><div class="ho-br-page"></div></div>' +
+      '</div>';
+    b.querySelector(".ho-br-tab span").textContent = site.title;
+    b.querySelector(".ho-br-url span").textContent = site.url;
+    const pageEl = b.querySelector(".ho-br-page");
+    const im = document.createElement("img");
+    im.src = site.img;
+    im.alt = "";
+    pageEl.appendChild(im);
+    const view = b.querySelector(".ho-br-view");
+    // wide screens see the whole page; a phone sees about its left 700px
+    // (logo + headline) big enough to read, instead of a postage stamp
+    const fit = () => {
+      const w = view.clientWidth, h = view.clientHeight;
+      pageEl.style.transform = "scale(" + Math.min(1, Math.max(w / 1280, Math.min(h / 800, w / 700))) + ")";
+    };
+    fit();
+    requestAnimationFrame(fit);
+  }
+
+  function oopsCancel() {
+    clearTimeout(oopsTimer);
+    oopsTimer = null;
+    oopsQueued = null;
+  }
+
+  // Put something on the shared screen. A share that is just STARTING may
+  // open on a forgotten tab first; whatever arrives meanwhile is held and
+  // the newest of it shown when the tab goes away.
+  function show(fn, mayOops) {
+    if (!open) return;
+    if (oopsTimer) { oopsQueued = fn; return; }
+    const starting = !root.classList.contains("presenting");
+    setPresenting(true);
+    const b = root.querySelector(".ho-present-body");
+    if (starting && mayOops && Math.random() < OOPS_ODDS) {
+      showSite(b, oopsSite());
+      oopsQueued = fn;
+      oopsTimer = setTimeout(() => {
+        const q = oopsQueued;
+        oopsTimer = null;
+        oopsQueued = null;
+        if (open && q) q(root.querySelector(".ho-present-body"));
+      }, OOPS_MS);
+      return;
+    }
+    fn(b);
+  }
+
   function el(tag, cls, html) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -48,6 +126,10 @@ var Hangout = (function () {
         '<div class="ho-tile ho-haruto">' +
           '<img class="ho-face" src="intern.avif" alt="Haruto">' +
           '<div class="ho-name">Haruto · intern <i class="fas fa-microphone-slash ho-mic"></i></div>' +
+        '</div>' +
+        '<div class="ho-tile ho-fern">' +
+          '<img class="ho-face" src="whack-face.avif" alt="Fernando">' +
+          '<div class="ho-name">Fernando <i class="fas fa-microphone-slash ho-mic"></i></div>' +
         '</div>' +
         '<div class="ho-toast"></div>' +
         '<div class="ho-tile ho-me">' +
@@ -84,12 +166,13 @@ var Hangout = (function () {
       tick();
       timer = setInterval(tick, 1000);
       setPresenting(false);
-      root.classList.remove("harriet-here", "harriet-speaking", "haruto-quiet");
+      root.classList.remove("harriet-here", "harriet-speaking", "haruto-quiet", "huddle");
       root.querySelector(".ho-cap-ai").textContent = "";
       root.querySelector(".ho-cap-me").textContent = "";
     } else {
       clearInterval(timer);
       timer = null;
+      oopsCancel();
     }
     document.body.classList.toggle("in-hangout", on);
   }
@@ -97,12 +180,6 @@ var Hangout = (function () {
   function setPresenting(on) {
     root.classList.toggle("presenting", on);
     if (!on) root.querySelector(".ho-present-body").innerHTML = "";
-  }
-
-  function body() {
-    if (!open) return null;
-    setPresenting(true);
-    return root.querySelector(".ho-present-body");
   }
 
   const STATUS = {
@@ -131,6 +208,7 @@ var Hangout = (function () {
       root.classList.toggle("ai-speaking", p === "speaking" || p === "haruto");
       root.classList.toggle("harriet-here", !!call.harriet);
       root.classList.toggle("haruto-quiet", !!call.harutoQuiet);
+      root.classList.toggle("huddle", !!call.huddle); // Fernando + Carol off in private
       root.classList.toggle("harriet-speaking", p === "harriet");
       root.classList.toggle("me-speaking", p === "listening" && !!call.heard);
       root.classList.toggle("my-turn", p === "listening" && !call.heard);
@@ -165,34 +243,31 @@ var Hangout = (function () {
       t.classList.add("show");
     },
     presentSvg(svg) {
-      const b = body();
-      if (!b) return;
       const cut = (svg || "").lastIndexOf(">");
       if (cut < 0) return;
-      b.innerHTML = '<div class="ho-svg">' + _safeSvg(svg.slice(0, cut + 1)) + "</div>";
+      const html = '<div class="ho-svg">' + _safeSvg(svg.slice(0, cut + 1)) + "</div>";
+      show((b) => { b.innerHTML = html; }, true);
     },
     presentNode(node) {
-      const b = body();
-      if (!b || !node) return;
-      b.innerHTML = "";
-      b.appendChild(node);
+      if (!node) return;
+      show((b) => { b.innerHTML = ""; b.appendChild(node); }, true);
     },
     presentCode(lang, code) {
-      const b = body();
-      if (!b) return;
-      const pre = el("pre", "ho-code");
-      pre.textContent = code || "";
-      b.innerHTML = "";
-      if (lang) b.appendChild(el("div", "ho-code-lang", null)).textContent = lang;
-      b.appendChild(pre);
+      show((b) => {
+        const pre = el("pre", "ho-code");
+        pre.textContent = code || "";
+        b.innerHTML = "";
+        if (lang) b.appendChild(el("div", "ho-code-lang", null)).textContent = lang;
+        b.appendChild(pre);
+      }, false);
     },
     presentPending() {
-      const b = body();
-      if (!b) return;
-      b.innerHTML = '<img class="ho-pending" src="norms.avif" alt="cooking…">';
+      show((b) => { b.innerHTML = '<img class="ho-pending" src="norms.avif" alt="cooking…">'; }, true);
     },
     presentClear() {
-      if (open) setPresenting(false);
+      if (!open) return;
+      if (oopsTimer) { oopsQueued = () => setPresenting(false); return; }
+      setPresenting(false);
     },
   };
 })();
