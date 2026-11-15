@@ -141,6 +141,10 @@ var Hangout = (function () {
           '<img class="ho-face" src="intern.avif" alt="Jacob">' +
           '<div class="ho-name">Jacob · intern <i class="fas fa-microphone-slash ho-mic"></i></div>' +
         '</div>' +
+        '<div class="ho-tile ho-daddy">' +
+          '<img class="ho-face" src="daddy.webp" alt="Daddy">' +
+          '<div class="ho-name">Daddy <i class="fas fa-microphone ho-mic"></i></div>' +
+        '</div>' +
         '<div class="ho-tile ho-fern">' +
           '<img class="ho-face" src="whack-face.avif" alt="Fernando">' +
           '<div class="ho-name">Fernando <i class="fas fa-microphone-slash ho-mic"></i></div>' +
@@ -180,7 +184,7 @@ var Hangout = (function () {
       tick();
       timer = setInterval(tick, 1000);
       setPresenting(false);
-      root.classList.remove("harriet-here", "harriet-speaking", "haruto-quiet", "huddle");
+      root.classList.remove("harriet-here", "harriet-speaking", "haruto-quiet", "huddle", "daddy-here", "daddy-speaking");
       root.querySelector(".ho-cap-ai").textContent = "";
       root.querySelector(".ho-cap-me").textContent = "";
     } else {
@@ -204,6 +208,7 @@ var Hangout = (function () {
     speaking: "",
     harriet: "",
     haruto: "",
+    daddy: "",
   };
 
   return {
@@ -226,6 +231,8 @@ var Hangout = (function () {
       root.classList.toggle("haruto-quiet", !!call.harutoQuiet);
       root.classList.toggle("huddle", !!call.huddle); // Fernando + Carol off in private
       root.classList.toggle("harriet-speaking", p === "harriet");
+      root.classList.toggle("daddy-here", !!call.daddyHere); // pops in, then he's gone
+      root.classList.toggle("daddy-speaking", p === "daddy");
       root.classList.toggle("me-speaking", p === "listening" && !!call.heard);
       root.classList.toggle("my-turn", p === "listening" && !call.heard);
       root.classList.toggle("me-muted", p === "muted");

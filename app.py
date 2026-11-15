@@ -1183,7 +1183,8 @@ def filter_tools(ll):
             row.pop("ramble", None)
             if isinstance(row.get("content"), str):
                 note = (
-                    HARRIET_HUDDLE if speaker == "harriet" and huddle
+                    DADDY_NOTE if speaker == "daddy"
+                    else HARRIET_HUDDLE if speaker == "harriet" and huddle
                     else (HARRIET_ASIDE if aside else HARRIET_SPEAKS) if speaker == "harriet"
                     else (HARUTO_ASIDE if aside else HARUTO_HANDOFF) if speaker == "haruto"
                     else {"harriet_joined": HARRIET_JOINED, "harriet_left": HARRIET_LEFT,
@@ -2522,13 +2523,123 @@ def _advice_before_huddle(uid, limit=80):
     return None
 
 
-def _customer_request(uid, limit=60):
+def _handoff_cue(uid, side, ahead=None):
+    """Fernando's turn when he's put through from Jacob (fernando_joined) or
+    back from Carol's huddle (fernando_back): one self-contained cue (it
+    carries the call rules itself - the terse note on top of it made him say
+    his name / label lines)."""
+    cue = {"fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK}[side]
+    if side == "fernando_back":
+        said = _advice_before_huddle(uid)
+        if said:
+            cue += f' The advice you gave, which Carol objected to: "{said}"'
+    if side == "fernando_joined":
+        ask = _customer_request(uid, ahead=ahead)
+        cue += (f' The customer wants: "{ask}". Answer that now.'
+                if ask else " Ask them, in one short line, what they need.")
+    cue += (" You are talking out loud to the customer: 1-2 short spoken sentences. Don't "
+            "greet, don't say your name, don't mention Jacob.")
+    return cue
+
+
+# Fernando's reply, banked. Jacob's small talk never reaches Fernando, so the
+# moment the phone rings on a call Jacob will pick up (or when he holds the
+# line during Carol's huddle) everything Fernando will answer from is
+# already known: his reply starts generating right then and waits here until
+# he's put through. At ring time the pickup isn't saved yet - the rows it
+# will add (the "you picked up" event, the /call topic) are passed as
+# `ahead`, and the context check at the handoff confirms the guess. Used
+# only if his context at the handoff is exactly what it was generated from
+# (anything new in between - Carol swooning over the nudes, say - and it's
+# generated live as before). In-process only; a restart just loses it.
+_fernando_bank = {}  # uid -> {"side", "key", "task", "t"}
+
+
+def _bank_history(uid, side, ahead=None):
+    history = filter_tools(add_to_session(uid) + list(ahead or []))
+    history.append({"role": "user", "content": "sidechannel: " + _handoff_cue(uid, side, ahead)})
+    return history
+
+
+async def _bank_run(history):
+    chunks = []
+    async for chunk in openrouter_stream(_model, history, _call_tools, "auto", think=False):
+        chunks.append(chunk)
+    return chunks
+
+
+def fernando_bank_start(uid, side, ahead=None):
+    """Start generating Fernando's handoff reply now (see _fernando_bank).
+    Already banked from the same context (at ring time): kept as is."""
+    if rds.get(f"game:{uid}") or (not ahead and _latest_call_event(uid) != "you picked up"):
+        fernando_bank_drop(uid)
+        return  # a game block / a non-call turn - built differently, leave it live
+    history = _bank_history(uid, side, ahead)
+    key = json.dumps(history, sort_keys=True)
+    old = _fernando_bank.get(uid)
+    if old and old["side"] == side and old["key"] == key:
+        print(f"[bank] {uid}: {side} reply already banked at ring time - keeping it")
+        return
+    fernando_bank_drop(uid)
+    _fernando_bank[uid] = {"side": side, "key": key,
+                           "task": asyncio.create_task(_bank_run(history)), "t": time.time()}
+    print(f"[bank] {uid}: generating Fernando's {side} reply early")
+
+
+def fernando_bank_drop(uid):
+    old = _fernando_bank.pop(uid, None)
+    if old:
+        old["task"].cancel()
+
+
+@app.post("/fernando/bank")
+async def fernando_bank(data: dict):
+    """{uid, topic}: the phone is ringing and Jacob will pick up - start
+    Fernando's eventual reply now, before they even answer."""
+    uid = data.get("uid")
+    if not uid:
+        return JSONResponse({"ok": False})
+    ahead = [{"role": "user", "content": "you picked up"}]
+    topic = (data.get("topic") or "").strip()
+    if topic:
+        ahead.append({"role": "user", "content": topic})
+    try:
+        fernando_bank_start(uid, "fernando_joined", ahead)
+    except Exception as e:
+        print(f"[bank] {uid}: couldn't start at ring: {e}")
+        return JSONResponse({"ok": False})
+    return JSONResponse({"ok": True})
+
+
+def _bank_take(uid, side, model_history):
+    b = _fernando_bank.pop(uid, None)
+    if not b:
+        return None
+    if b["side"] != side or b["key"] != json.dumps(model_history, sort_keys=True) or time.time() - b["t"] > 600:
+        b["task"].cancel()
+        print(f"[bank] {uid}: context changed since banking - generating live")
+        return None
+    b["waited"] = time.time()
+    return b
+
+
+async def _bank_replay(b):
+    """The banked stream, replayed. If banking failed, the live retry takes over."""
+    chunks = await b["task"]
+    print(f"[bank] {b.get('side')}: banked {time.time() - b['t']:.1f}s ago, "
+          f"waited {time.time() - b['waited']:.1f}s at the handoff")
+    for chunk in chunks:
+        yield dict(chunk)
+
+
+def _customer_request(uid, limit=60, ahead=None):
     """The customer's newest real request - a /call topic or their last chat
     message - skipping small talk with Jacob, lines to Carol, colleagues'
-    lines and call events. None if there isn't one."""
-    for raw in rds.lrange(f"sess:{uid}", 0, limit):
+    lines and call events. None if there isn't one. ahead: rows not saved
+    yet (oldest first) that will be newer than the session's."""
+    for raw in list(reversed(ahead or [])) + rds.lrange(f"sess:{uid}", 0, limit):
         try:
-            m = json.loads(html.unescape(raw.decode()))
+            m = raw if isinstance(raw, dict) else json.loads(html.unescape(raw.decode()))
         except Exception:
             continue
         if not isinstance(m, dict) or m.get("role") != "user" or not isinstance(m.get("content"), str):
@@ -2674,6 +2785,12 @@ async def chat(data: dict):
                     break
             history = add_to_session(uid)
             fetched_pages = ""
+        elif not data.get("regen") and data.get("speaker") == "harriet" and data.get("saved"):
+            # Carol named Fernando in a line that's already in the chat (her
+            # answer to the customer or to Jacob): he answers her
+            history = add_to_session(uid)
+            touch(uid)
+            fetched_pages = ""
         elif not data.get("regen") and data.get("sidechannel") in ("fernando_joined", "fernando_back"):
             # put through right after Jacob's last line: there is no
             # customer line - Fernando's turn is built from the handoff cue
@@ -2758,19 +2875,9 @@ async def chat(data: dict):
             print(f"[call] {uid}: live voice call - sending think:false")
             _call_terse(model_history)
         if _handoff:
-            # one self-contained cue (it carries the call rules itself - the
-            # terse note on top of it made him say his name / label lines)
-            if data.get("sidechannel") == "fernando_back":
-                said = _advice_before_huddle(uid)
-                if said:
-                    _handoff += f' The advice you gave, which Carol objected to: "{said}"'
-            if data.get("sidechannel") == "fernando_joined":
-                ask = _customer_request(uid)
-                _handoff += (f' The customer wants: "{ask}". Answer that now.'
-                             if ask else " Ask them, in one short line, what they need.")
-            _handoff += (" You are talking out loud to the customer: 1-2 short spoken sentences. Don't "
-                         "greet, don't say your name, don't mention Jacob.")
-            model_history.append({"role": "user", "content": "sidechannel: " + _handoff})
+            model_history.append({"role": "user", "content": "sidechannel: " + _handoff_cue(uid, data.get("sidechannel"))})
+        if data.get("speaker") == "harriet" and data.get("saved") and not data.get("regen"):
+            model_history.append({"role": "user", "content": "sidechannel: " + HARRIET_NAMED_YOU})
         if fetched_pages and model_history and model_history[-1].get("role") == "user":
             model_history[-1]["content"] = (
                 (model_history[-1].get("content") or "")
@@ -2844,6 +2951,10 @@ async def chat(data: dict):
                 # message would skip it and the model would stall.
                 model_history.append({"role": "user", "content": games.game_block(st)})
 
+        # put through: Fernando's reply may already be banked (started when
+        # Jacob took the line) - used only if his context is still identical
+        _banked = _bank_take(uid, data.get("sidechannel"), model_history) if _handoff and _think is False else None
+
         async def generate():
             # Bounded tool loop: the model may call a tool (web_search,
             # web_fetch, play_game, ...); we run it, feed the result back,
@@ -2877,7 +2988,9 @@ async def chat(data: dict):
                     emitted = False
                     looped = False
                     try:
-                        async for chunk in openrouter_stream(openrouter_model, history, _call_tools if _think is False else _tools, "auto", think=_think):
+                        _src = (_bank_replay(_banked) if _banked and _pass == 0 and attempt == 1
+                                else openrouter_stream(openrouter_model, history, _call_tools if _think is False else _tools, "auto", think=_think))
+                        async for chunk in _src:
                             choices = chunk.get("choices", [])
                             content = ""
                             if choices:
@@ -3239,7 +3352,7 @@ def _tts_subsection(text, max_words=80):
 # Each speaker on a call has one fixed voice.
 KOKORO_BASE = os.environ.get("WHACK_KOKORO", "http://10.0.0.190:8080/v1")
 KOKORO_SPEED = 1.2
-KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_puck"}
+KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_puck", "daddy": "am_onyx"}
 # Jacob's own voice
 JACOB_TTS_BASE = os.environ.get("WHACK_JACOB_TTS_BASE", "http://10.0.0.223:8000/v1")
 JACOB_TTS_MODEL = os.environ.get("WHACK_JACOB_TTS_MODEL", "breeze-tts-2")
@@ -3427,6 +3540,14 @@ HARRIET_JOINED = (
     "is on this call, listening in to supervise you - because of your previous "
     "issues (customer complaints, HR incidents) she has been assigned to watch over you. "
     "She is not the user."
+)
+DADDY_NOTE = (
+    "That message is from \"Daddy\", a gruff older man nobody on the call knows, who popped into "
+    "the call uninvited, told Jacob off and left. Not from the user."
+)
+HARRIET_NAMED_YOU = (
+    "Carol just mentioned you in what she said on the call. Answer HER once, out loud, by name, "
+    "unrepentant and condescending, in one or two short spoken sentences."
 )
 HARRIET_SPEAKS = (
     "That message is from Carol Humbug, not the user. Carol is the HR manager at Mole "
@@ -3620,21 +3741,52 @@ def harriet_dismissed(text):
         return False
 
 
-def harriet_reply(text, last="", haruto=False):
+def _carol_recap(uid, limit=80):
+    """What Carol knows happened on this call so far: Fernando's latest line
+    and that she talked to him privately. Without it she made it up ("Jacob
+    and I had a productive strategy session"). Never mention Jacob here -
+    naming him is what gets her confused about who was in the huddle."""
+    if not uid:
+        return ""
+    fern = ""
+    huddled = False
+    for raw in rds.lrange(f"sess:{uid}", 0, limit):
+        try:
+            m = json.loads(html.unescape(raw.decode()))
+        except Exception:
+            continue
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") == "user" and m.get("content") == "you picked up":
+            break  # this call only
+        if m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"].strip() and not fern:
+            fern = m["content"].strip()[:400]
+        if m.get("speaker") == "harriet" and m.get("huddle"):
+            huddled = True
+    out = ""
+    if huddled:
+        out += "You just talked to Fernando privately.\n"
+    if fern:
+        out += f'Fernando last said on the call: "{fern}"\n'
+    return out
+
+
+def harriet_reply(text, last="", haruto=False, uid=None):
     """Carol answering the customer directly. Returns (spoken_text, leaves)."""
     leaves = harriet_dismissed(text)
-    before = f'You last said on the call: "{last}"\n' if last else ""
+    before = _carol_recap(uid) + (f'You last said on the call: "{last}"\n' if last else "")
     res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
         "model": _model,
         "messages": [
             {"role": "system", "content": HARRIET_SYSTEM + (HARRIET_GOODBYE if leaves else "")},
             {"role": "user", "content": (
-                f"{_harriet_cast(haruto)}\n\n" + before
+                before
                 + f'The user is talking to YOU now, not Fernando: "{text}"\n\n'
                 "Answer exactly what they asked, out loud, in one or two short, prim sentences - "
                 "like \"I don't eat lunch at the office, I'm here for business.\" Stay polite to "
-                "them - they are the valuable client. Only bring up Fernando or Jacob if they "
-                "asked about them or something Fernando did is the problem.")},
+                "them - they are the valuable client. Only bring up your colleagues if they "
+                "asked about them or something Fernando did is the problem. You don't know the customer's "
+                "name - don't make one up - and don't invent anything that didn't happen on this call.")},
         ],
         "stream": False,
         "think": False,
@@ -3646,6 +3798,32 @@ def harriet_reply(text, last="", haruto=False):
     return _unemail(_strip_parens_lines(out)), leaves
 
 
+def harriet_to(who, text, uid=None, haruto=False):
+    """A colleague named Carol on the call (who: 'jacob' | 'fernando'): she
+    answers him. Returns her spoken line."""
+    name = {"jacob": "Jacob, the intern,", "fernando": "Fernando"}[who]
+    res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
+        "model": _model,
+        "messages": [
+            {"role": "system", "content": HARRIET_SYSTEM},
+            {"role": "user", "content": (
+                f"{_harriet_cast(haruto)}\n\n" + _carol_recap(uid)
+                + f'{name} just said on the call, mentioning you: "{text}"\n\n'
+                + ("You adore Jacob - you're warm, doting and a little flustered with him, never harsh. "
+                   if who == "jacob" else "")
+                + f"Answer {'Jacob' if who == 'jacob' else 'Fernando'} - you're talking to him now - out loud, in "
+                "one or two short, prim sentences. You don't know the customer's name - don't make "
+                "one up - and don't invent anything that didn't happen on this call.")},
+        ],
+        "stream": False,
+        "think": False,
+    }, timeout=90.0)
+    out = (res.json()["choices"][0]["message"].get("content") or "").strip()
+    out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
+    out = re.sub(r"^\s*(?:carol|harriet)(?: humbug)?\s*:\s*", "", out, flags=re.I)
+    return _unemail(_strip_parens_lines(out)).strip().strip('"\u201c\u201d').strip()
+
+
 # ---- Jacob: the intern who answers half the calls the user places ---------
 # Jacob runs on the plain drawing model: he only ever sees small talk, so
 # nothing he is given will trip its guardrails.
@@ -3654,7 +3832,9 @@ HARUTO_SYSTEM = (
     "You are Jacob, a brand-new intern at Mole Star. You answer customers' phone calls when "
     "Fernando, the lead advisor isn't there yet, and hold the line until he is. You are eager, "
     "cheery and know absolutely nothing - not the products, not the advice, not how anything "
-    "works. You only make small talk with the client. If the customer "
+    "works. You only make small talk with the client. Your colleagues on calls: Fernando, the lead "
+    "advisor, and Carol Humbug from HR, who supervises calls - she's strict with everyone but has a soft "
+    "spot for you, and you think she's lovely. If the customer "
     "asks about anything real, you cheerfully admit you have no idea and drift back to small talk.\n\n"
     "About you - only if the conversation makes it relevant (they ask, or it naturally comes up); "
     "never volunteer it, nobody recites their life story: you grew up in Hsinchu, Taiwan; these days you live in "
@@ -3691,6 +3871,8 @@ HARUTO_NEW_CALL = (
 _HARUTO_NOTES = None  # set below, once the notes exist
 _JACOB_RE = re.compile(r"\b(ja[ck]ob|jake)\b", re.I)
 HARUTO_CAROL = 'Carol from HR, on the call, says: "{said}"'
+HARUTO_FERNANDO = 'Fernando, the lead advisor, on the call, says: "{said}"'
+HARUTO_DADDY = 'Daddy just popped into the call, said "{said}" to you, and left.'
 # the customer asks Jacob for nudes: he puts THE picture up on the screen
 HARUTO_NUDES = {"frontal": "jacob-nudes.webp", "lounging": "jacob-nudes-2.webp"}
 HARUTO_SHARED = ("They asked for nudes, and you obliged: your {pose} nude is up on the call's "
@@ -3733,6 +3915,12 @@ def _haruto_window(uid, limit=40):
             if errand:  # (newest first - lands AFTER the hold note) she sent him on an errand
                 out.append({"role": "user", "content": HARUTO_CAROL.format(said=errand)})
             out.append({"role": "user", "content": HARUTO_RESUME if m.get("ramble") else HARUTO_HOLD})
+        elif m.get("speaker") == "daddy":
+            out.append({"role": "user", "content": HARUTO_DADDY.format(said=m["content"])})
+        elif m.get("role") == "assistant" and m.get("call") and _JACOB_RE.search(m["content"]):
+            # Fernando named him on the call - he heard that one line
+            out.append({"role": "user", "content": HARUTO_FERNANDO.format(said=m["content"])})
+            out.append({"role": "user", "content": HARUTO_SUMMONED})
         elif m.get("speaker") == "harriet" and _JACOB_RE.search(m["content"]):
             # Carol named him on the call - he heard that much
             out.append({"role": "user", "content": HARUTO_CAROL.format(said=m["content"])})
@@ -3850,6 +4038,8 @@ async def haruto(data: dict):
         # window it shows up because it names him
         if text and not data.get("saved"):
             add_to_session(uid, {"role": "user", "content": text, "speaker": "harriet"})
+    elif mode == "summoned" and data.get("by") == "fernando":
+        pass  # Fernando's line is already saved (his reply)
     elif text:
         row = {"role": "user", "content": text}
         if mode != "open":
@@ -3869,11 +4059,18 @@ async def haruto(data: dict):
         if ramble:
             row["ramble"] = True
         add_to_session(uid, row)
+    # he's taking the line: Fernando's eventual reply starts now, alongside
+    # Jacob's opener (kept as is if it was already banked at ring time)
+    if mode == "open":
+        try:
+            fernando_bank_start(uid, "fernando_back" if data.get("huddle") else "fernando_joined")
+        except Exception as e:
+            print(f"[bank] {uid}: couldn't start: {e}")
     # asked him for nudes (said to him, not his opener)? System One decides,
     # seeing his previous line too ("which one?" -> "lounging"). The pose they
     # asked for, else he takes turns - never the same one twice in a row.
     pose = ""
-    if mode != "open" and data.get("by") != "carol" and text and _NUDES_HINT_RE.search(text):
+    if mode != "open" and data.get("by") not in ("carol", "fernando") and text and _NUDES_HINT_RE.search(text):
         prev = ""
         for raw in rds.lrange(f"sess:{uid}", 1, 12):  # (0 is the line just saved)
             try:
@@ -3945,6 +4142,73 @@ def _one_off(prompt):
     return out.strip().strip('"\u201c\u201d').strip()
 
 
+# Daddy: right after the nudes reactions a minor character pops into the
+# call (once a call), scolds Jacob, and leaves. Then Jacob is mortified,
+# Fernando wants to know who that was, and Carol wants his number - each a
+# one-off prompt with no chat history, like the reactions above.
+DADDY_SAYS = (
+    "You are Daddy - a gruff older man in a flat cap and a black leather jacket, the man Jacob the "
+    "intern calls Daddy. You have just popped into a live voice call at Jacob's work, uninvited, "
+    "and seen the nude photo of himself he put up on the shared screen. Say something like "
+    "\"Jacob, what did you just do? You've been a naughty boy.\" One or two short spoken sentences, "
+    "to Jacob. Never explicit. Just the words: no quotation marks, no stage directions."
+)
+DADDY_JACOB = (
+    "You are Jacob, a cheery robot intern at Mole Star, on a live voice call at work. A man you call "
+    "Daddy just popped into the call uninvited, said \"{daddy}\", and left. You are mortified - "
+    "something like \"I'm at work, Daddy! How did you even join? Are you trying to get me fired?\" "
+    "Say it out loud, to Daddy, in one or two short spoken sentences. Just the words: no quotation "
+    "marks, no stage directions."
+)
+DADDY_FERNANDO = (
+    "You are Fernando, an advisor at Mole Star, on a live voice call with a customer. A gruff older "
+    "man none of you know just popped into the call, said \"{daddy}\" to Jacob the intern, and left. "
+    "Something like \"Who the hell was that?\" One short spoken sentence. Just the words: no "
+    "quotation marks, no stage directions."
+)
+DADDY_CAROL = (
+    "You are Carol Humbug, the prim, persnickety HR manager at Mole Star, on a live voice call. A "
+    "rugged older man in a flat cap and a leather jacket, who goes by Daddy, just popped into the "
+    "call, said \"{daddy}\" to Jacob the intern, and left. You're smitten - something like \"Oh, I "
+    "want his number!\" One or two short spoken sentences. Never explicit. Just the words: no "
+    "quotation marks, no stage directions."
+)
+
+
+@app.post("/daddy")
+async def daddy(data: dict):
+    """{uid, fernando: bool, carol: bool} -> {daddy, jacob, fernando, carol}.
+    Daddy's line, Jacob's, and the reactions of whoever is on the line. All
+    saved to the chat except Carol's (saved when she says it - /carol/said)."""
+    uid = data.get("uid")
+    out = {"daddy": "", "jacob": "", "fernando": "", "carol": ""}
+    if not uid:
+        return JSONResponse(out)
+    try:
+        out["daddy"] = await asyncio.to_thread(_one_off, DADDY_SAYS)
+    except Exception as e:
+        print(f"daddy: failed: {e}")
+    if not out["daddy"]:
+        return JSONResponse(out)
+    said = out["daddy"].replace('"', "'")
+    jobs = {"jacob": DADDY_JACOB}
+    if data.get("fernando"):
+        jobs["fernando"] = DADDY_FERNANDO
+    if data.get("carol"):
+        jobs["carol"] = DADDY_CAROL
+    results = await asyncio.gather(*(asyncio.to_thread(_one_off, p.format(daddy=said)) for p in jobs.values()),
+                                   return_exceptions=True)
+    for k, v in zip(jobs, results):
+        out[k] = v if isinstance(v, str) else ""
+    add_to_session(uid, {"role": "user", "content": out["daddy"], "speaker": "daddy", "aside": True})
+    if out["jacob"]:
+        add_to_session(uid, {"role": "user", "content": out["jacob"], "speaker": "haruto", "aside": True})
+    if out["fernando"]:
+        add_to_session(uid, {"role": "assistant", "content": out["fernando"], "call": True})
+    touch(uid)
+    return JSONResponse(out)
+
+
 @app.post("/nudes/react")
 async def nudes_react(data: dict):
     """{uid, fernando: bool, carol: bool} -> {fernando, carol}: who is on the
@@ -3995,8 +4259,19 @@ async def harriet_reply_endpoint(data: dict):
     text = (data.get("text") or "").strip()
     if not uid or not text:
         return JSONResponse({"text": "", "leave": False})
+    if data.get("by") == "jacob":
+        # Jacob named her: she answers him (his line is already in the chat)
+        try:
+            say = await asyncio.to_thread(harriet_to, "jacob", text, uid, True)
+        except Exception as e:
+            print(f"harriet: answering jacob failed: {e}")
+            say = ""
+        if say:
+            add_to_session(uid, {"role": "user", "content": say, "speaker": "harriet", "aside": True})
+        touch(uid)
+        return JSONResponse({"text": say, "leave": False})
     try:
-        say, leave = await asyncio.to_thread(harriet_reply, text, (data.get("last") or "").strip(), bool(data.get("haruto")))
+        say, leave = await asyncio.to_thread(harriet_reply, text, (data.get("last") or "").strip(), bool(data.get("haruto")), uid)
     except Exception as e:
         print(f"harriet: reply failed: {e}")
         return JSONResponse({"text": "", "leave": False})
@@ -4037,6 +4312,15 @@ async def harriet(data: dict):
         return JSONResponse({"intervene": False})
     scores = await asyncio.to_thread(harriet_scores, text)
     if not scores or max(scores.values()) <= HARRIET_THRESHOLD:
+        if data.get("named"):
+            # Fernando mentioned her: she answers him, scolding or not
+            try:
+                said = await asyncio.to_thread(harriet_to, "fernando", text, data.get("uid"), bool(data.get("haruto")))
+            except Exception as e:
+                print(f"harriet: answering fernando failed: {e}")
+                said = ""
+            if said:
+                return JSONResponse({"intervene": True, "named": True, "scores": scores, "text": said})
         return JSONResponse({"intervene": False, "scores": scores})
     if data.get("huddle_ok") and max(scores.values()) > HARRIET_HUDDLE_THRESHOLD:
         # way over the line: no scolding - a canned line, and she takes
@@ -4065,6 +4349,8 @@ async def call_state(data: dict):
     if not uid or state not in ("live", "ended"):
         return JSONResponse({"ok": False})
     rds.delete(f"ring:{uid}")  # answered or declined - the ring is over
+    if state == "ended":
+        fernando_bank_drop(uid)
     if state == "live":
         # The call-log row: _latest_call_event() reads it to know the call is
         # live (think:false, the client reads replies aloud). No state line is

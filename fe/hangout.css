@@ -422,3 +422,23 @@
 .ho-browser { justify-content: flex-start; background: #dee1e6; }
 .ho-br-page { width: 1280px; height: 800px; transform-origin: 0 0; }
 .ho-br-page img, .ho-br-page iframe { width: 1280px; height: 800px; border: 0; display: block; object-fit: cover; object-position: top left; }
+
+/* ---- Daddy: pops into the call after Jacob's nudes, then leaves ---- */
+.ho-daddy {
+  right: 12px;
+  top: 12px;
+  width: var(--ho-pip-w);
+  aspect-ratio: 4 / 3;
+  background: #3b2f2a;
+  z-index: 2;
+  display: none;
+  overflow: hidden;
+}
+.ho.daddy-here .ho-daddy { display: flex; animation: ho-join 0.5s ease-out; }
+.ho-daddy .ho-face { width: 100%; height: 100%; object-fit: cover; border-radius: 0; }
+.ho.daddy-speaking .ho-daddy { box-shadow: 0 0 0 3px #c58af9; }
+.ho.daddy-speaking .ho-daddy .ho-face { animation: ho-talk 0.4s ease-in-out infinite alternate; }
+.ho.daddy-speaking .ho-daddy .ho-mic { color: #c58af9; }
+/* his bubble in the chat */
+.message-daddy { background: rgba(197, 138, 249, 0.12); border-left-color: #c58af9; }
+.message-daddy .harriet-name { color: #c58af9; }
