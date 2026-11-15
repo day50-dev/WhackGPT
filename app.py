@@ -4191,8 +4191,8 @@ DADDY_CAROL = (
 @app.post("/daddy")
 async def daddy(data: dict):
     """{uid, fernando: bool, carol: bool} -> {daddy, jacob, fernando, carol}.
-    Daddy's line, Jacob's, and the reactions of whoever is on the line. All
-    saved to the chat except Carol's (saved when she says it - /carol/said)."""
+    Daddy's line, Jacob's, and the reactions of whoever is on the line -
+    fetched early, saved as each is spoken (/call/said)."""
     uid = data.get("uid")
     out = {"daddy": "", "jacob": "", "fernando": "", "carol": ""}
     if not uid:
@@ -4216,19 +4216,14 @@ async def daddy(data: dict):
                                    return_exceptions=True)
     for k, v in zip(jobs, results):
         out[k] = v if isinstance(v, str) else ""
-    add_to_session(uid, {"role": "user", "content": out["daddy"], "speaker": "daddy", "aside": True})
-    if out["jacob"]:
-        add_to_session(uid, {"role": "user", "content": out["jacob"], "speaker": "haruto", "aside": True})
-    if out["fernando"]:
-        add_to_session(uid, {"role": "assistant", "content": out["fernando"], "call": True})
-    touch(uid)
+    # nothing is saved here: each line is saved as it's spoken (/call/said)
     return JSONResponse(out)
 
 
 @app.post("/nudes/react")
 async def nudes_react(data: dict):
     """{uid, fernando: bool, carol: bool} -> {fernando, carol}: who is on the
-    line reacts. Both lines are saved to the chat."""
+    line reacts."""
     uid = data.get("uid")
     if not uid:
         return JSONResponse({"fernando": "", "carol": ""})
@@ -4242,11 +4237,7 @@ async def nudes_react(data: dict):
                 wave=" Wave Fernando off." if fern else ""))
     except Exception as e:
         print(f"nudes: react failed: {e}")
-    if fern:
-        add_to_session(uid, {"role": "assistant", "content": fern, "call": True})
-    # Carol's line is saved when she says it (/carol/said) - Fernando's
-    # assistant row renders ~2s late in the chat, and hers must come after it
-    touch(uid)
+    # nothing is saved here: each line is saved as it's spoken (/call/said)
     return JSONResponse({"fernando": fern, "carol": carol})
 
 
@@ -4259,10 +4250,22 @@ async def carol_huddle_line_endpoint(data: dict):
 @app.post("/carol/said")
 async def carol_said(data: dict):
     """Save a scripted Carol line to the chat as she says it."""
+    return await call_said({**data, "speaker": "harriet"})
+
+
+@app.post("/call/said")
+async def call_said(data: dict):
+    """{uid, speaker, text}: save a scripted call line to the chat as it is
+    SPOKEN. The scripted lines (nudes reactions, Daddy) are fetched early,
+    all at once, so saving them as they're generated would scramble the
+    chat's order. speaker: harriet | haruto | daddy | fernando."""
     uid = data.get("uid")
     text = (data.get("text") or "").strip()
-    if uid and text:
-        add_to_session(uid, {"role": "user", "content": text, "speaker": "harriet", "aside": True})
+    who = data.get("speaker")
+    if uid and text and who in ("harriet", "haruto", "daddy", "fernando"):
+        row = ({"role": "assistant", "content": text, "call": True} if who == "fernando"
+               else {"role": "user", "content": text, "speaker": who, "aside": True})
+        add_to_session(uid, row)
         touch(uid)
     return JSONResponse({"ok": True})
 
