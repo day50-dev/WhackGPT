@@ -2482,7 +2482,8 @@ _CALL_LEAK_RE = re.compile(
     r"\b(spoken|short) sentences\b|read aloud|live (voice )?call\b.*\b(reply|respond|answer)|"
     r"\bmy (first |next )?turn\b|\bthe setup\b|\b(system prompt|my instructions|the instructions)\b|"
     r"\bI (must|should) (answer|respond|reply|not introduce)|\bstay in character\b|"
-    r"^\W*(this is |it'?s )?(fernando|whackgpt)( is)?( here| speaking)?\s*[.:!,-]",
+    r"^\W*(this is |it'?s )?(fernando|whackgpt)( is)?( here| speaking)?\s*[.:!,-]|"
+    r"\brestat(e|ing) (the|my|that) advice\b|\bthe customer\b|\bI'?ll (now )?(restate|rephrase)\b",
     re.I,
 )
 
@@ -2535,6 +2536,11 @@ def _customer_request(uid, limit=60):
             continue
         return m["content"].strip()[:400] or None
     return None
+
+
+# On a live call the call is already connected - offering start_voice_call
+# just gets it called (it ate a whole turn after Carol's huddle).
+_call_tools = [t for t in _tools if t["function"]["name"] != "start_voice_call"]
 
 
 def _call_reply_leaks(text):
@@ -2867,7 +2873,7 @@ async def chat(data: dict):
                     emitted = False
                     looped = False
                     try:
-                        async for chunk in openrouter_stream(openrouter_model, history, _tools, "auto", think=_think):
+                        async for chunk in openrouter_stream(openrouter_model, history, _call_tools if _think is False else _tools, "auto", think=_think):
                             choices = chunk.get("choices", [])
                             content = ""
                             if choices:
@@ -3311,8 +3317,8 @@ HARRIET_LEFT = "Carol Humbug (HR, Mole Star) has left the call. It is just you a
 
 HARRIET_HUDDLE_LINE = "Fernando, I need to talk to you privately."
 HARRIET_HUDDLE = (
-    "That is Carol Humbug (HR) pulling you off the call for a private talk about the advice you "
-    "just gave. You and Carol are off the line; Haruto the intern is holding the line."
+    "That was Carol Humbug (HR) pulling you aside for a private talk about the advice you had just "
+    "given. That private talk has already happened and is over."
 )
 FERNANDO_BACK = (
     "You are back on the live voice call after Carol from HR took you aside privately about your "

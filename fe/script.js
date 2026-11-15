@@ -1552,16 +1552,6 @@ function callReply(text) {
     });
 }
 
-var RINGTONES = [
-  'ringtones/ringtone1.mp3', 'ringtones/ringtone2.mp3', 'ringtones/ringtone3.mp3',
-  'ringtones/ringtone4.mp3', 'ringtones/ringtone5.mp3', 'ringtones/ringtone6.mp3',
-  'ringtones/ringtone7.mp3', 'ringtones/ringtone8.mp3', 'ringtones/ringtone9.mp3',
-  'ringtones/ringtone10.mp3', 'ringtones/ringtone11.mp3', 'ringtones/ringtone12.mp3',
-  'ringtones/ringtone13.mp3', 'ringtones/ringtone14.mp3', 'ringtones/ringtone15.mp3',
-  'ringtones/ringtone16.mp3', 'ringtones/ringtone17.mp3', 'ringtones/ringtone18.mp3',
-  'ringtones/ringtone19.mp3', 'ringtones/ringtone20.mp3'
-];
-
 function callRing(out, topic) {
   if (_call) return; // already ringing or on a call
   _call = { phase: 'ringing', out, topic: (topic || '').trim(), rec: null, ring: null, audio: null, heard: '', tokens: 0 };
@@ -1571,7 +1561,7 @@ function callRing(out, topic) {
   // Haruto -> Fernando, never Haruto -> you -> Fernando.
   const turns = Math.floor(Math.random() * 3);
   if (turns > 0) internStart(_call, turns);
-  const ring = new Audio(RINGTONES[Math.floor(Math.random() * RINGTONES.length)]);
+  const ring = new Audio('ringtones/ringtone' + Math.floor(Math.random() * 30 + 1) + '.m4a');
   ring.loop = true;
   ring.play().catch((e) => console.log('ringtone failed:', e));
   _call.ring = ring;
