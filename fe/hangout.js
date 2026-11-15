@@ -29,7 +29,10 @@ var Hangout = (function () {
   const XXX_SITES = [
     { title: "BWC-2005 — Fully Exposed, No Case, All 40 Pins | BoardHub", url: "boardhub.xxx/watch/bwc-2005", img: "sites/xxx-sbc.jpg" },
   ];
-  let oopsTimer = null, oopsQueued = null, oopsLast = null;
+  // oopsUp: the tab is on screen. oopsTimer: its minimum time is still
+  // running (anything arriving is held in oopsQueued). After that it stays
+  // up until real content arrives - the "cooking" placeholder never replaces it.
+  let oopsUp = false, oopsTimer = null, oopsQueued = null, oopsLast = null;
 
   // every site equally likely (never the same one twice in a row)
   function oopsSite() {
@@ -55,11 +58,12 @@ var Hangout = (function () {
     im.alt = "";
     pageEl.appendChild(im);
     const view = b.querySelector(".ho-br-view");
-    // wide screens see the whole page; a phone sees about its left 700px
-    // (logo + headline) big enough to read, instead of a postage stamp
+    // the whole page, scaled to fit - like a real shared screen
     const fit = () => {
       const w = view.clientWidth, h = view.clientHeight;
-      pageEl.style.transform = "scale(" + Math.min(1, Math.max(w / 1280, Math.min(h / 800, w / 700))) + ")";
+      const k = Math.min(1, w / 1280, h / 800);
+      pageEl.style.transform = "translate(" + Math.max(0, (w - 1280 * k) / 2) + "px, 0) scale(" + k + ")";
+      view.style.height = Math.ceil(800 * k) + "px";
     };
     fit();
     requestAnimationFrame(fit);
@@ -67,27 +71,36 @@ var Hangout = (function () {
 
   function oopsCancel() {
     clearTimeout(oopsTimer);
+    oopsUp = false;
     oopsTimer = null;
     oopsQueued = null;
   }
 
   // Put something on the shared screen. A share that is just STARTING may
-  // open on a forgotten tab first; whatever arrives meanwhile is held and
-  // the newest of it shown when the tab goes away.
-  function show(fn, mayOops) {
+  // open on a forgotten tab first: it stays at least OOPS_MS, then until
+  // something real (a drawing, an image, a document) arrives - the newest
+  // of whatever came meanwhile. pending = the "cooking" placeholder.
+  function show(fn, mayOops, pending) {
     if (!open) return;
-    if (oopsTimer) { oopsQueued = fn; return; }
+    if (oopsUp) {
+      if (oopsTimer) { if (!pending) oopsQueued = fn; return; }
+      if (pending) return; // the tab stands in for the placeholder
+      oopsUp = false;
+    }
     const starting = !root.classList.contains("presenting");
     setPresenting(true);
     const b = root.querySelector(".ho-present-body");
     if (starting && mayOops && Math.random() < OOPS_ODDS) {
       showSite(b, oopsSite());
-      oopsQueued = fn;
+      oopsUp = true;
+      oopsQueued = pending ? null : fn;
       oopsTimer = setTimeout(() => {
         const q = oopsQueued;
         oopsTimer = null;
         oopsQueued = null;
-        if (open && q) q(root.querySelector(".ho-present-body"));
+        if (!open || !q) return; // nothing real yet - the tab stays up
+        oopsUp = false;
+        q(root.querySelector(".ho-present-body"));
       }, OOPS_MS);
       return;
     }
@@ -262,11 +275,11 @@ var Hangout = (function () {
       }, false);
     },
     presentPending() {
-      show((b) => { b.innerHTML = '<img class="ho-pending" src="norms.avif" alt="cooking…">'; }, true);
+      show((b) => { b.innerHTML = '<img class="ho-pending" src="norms.avif" alt="cooking…">'; }, true, true);
     },
     presentClear() {
       if (!open) return;
-      if (oopsTimer) { oopsQueued = () => setPresenting(false); return; }
+      oopsCancel(); // an image failed - the tab goes too
       setPresenting(false);
     },
   };

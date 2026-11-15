@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import xml.etree.ElementTree as ET
 import uuid, os, redis, json, html
 import base64, requests, re
 import asyncio
@@ -923,7 +924,20 @@ def _clean_svg(svg):
             s = s[:idx + len("</svg>")]
         else:
             s += "</svg>"
+    # a bare '&' ("Oil & Mining") is invalid XML - and an <img> of an SVG
+    # with one XML error shows nothing at all
+    s = re.sub(r"&(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#x[0-9a-fA-F]+);)", "&amp;", s)
     return s
+
+
+def _svg_ok(svg):
+    """Is this (cleaned) SVG well-formed XML - i.e. will a browser draw it?"""
+    try:
+        ET.fromstring(svg)
+        return True
+    except Exception as e:
+        print(f"draw_diagram: bad svg - {e}")
+        return False
 
 # The drawing sub-agent: the chat model only describes the picture (the
 # draw_diagram tool); this model (same gateway, different model string) writes
@@ -1004,9 +1018,9 @@ def render_svg(description, on_progress=None):
             last = f"draw stream failed: {e}"
         else:
             svg = _svg_from_text(text)
-            if svg:
+            if svg and (_svg_ok(_clean_svg(svg)) or attempt == DRAW_ATTEMPTS):
                 return svg
-            last = f"no svg in reply: {text[:200]!r}"
+            last = "svg is not valid XML" if svg else f"no svg in reply: {text[:200]!r}"
         print(f"draw_diagram: attempt {attempt}/{DRAW_ATTEMPTS} failed - {last}")
     raise ValueError(last)
 
@@ -2467,7 +2481,8 @@ _CALL_LEAK_RE = re.compile(
     r"\b(one|two|three|1|2|3)\s*(-|–|—|to|or)\s*(two|three|2|3)\s+(short\s+)?(spoken\s+)?sentences|"
     r"\b(spoken|short) sentences\b|read aloud|live (voice )?call\b.*\b(reply|respond|answer)|"
     r"\bmy (first |next )?turn\b|\bthe setup\b|\b(system prompt|my instructions|the instructions)\b|"
-    r"\bI (must|should) (answer|respond|reply|not introduce)|\bstay in character\b",
+    r"\bI (must|should) (answer|respond|reply|not introduce)|\bstay in character\b|"
+    r"^\W*(this is |it'?s )?(fernando|whackgpt)( is)?( here| speaking)?\s*[.:!,-]",
     re.I,
 )
 
@@ -2486,6 +2501,23 @@ def _spoke_this_call(uid, limit=80):
         if m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"].strip():
             return True
     return False
+
+
+def _advice_before_huddle(uid, limit=80):
+    """What Fernando said right before Carol pulled him aside."""
+    seen_huddle = False
+    for raw in rds.lrange(f"sess:{uid}", 0, limit):
+        try:
+            m = json.loads(html.unescape(raw.decode()))
+        except Exception:
+            continue
+        if not isinstance(m, dict):
+            continue
+        if m.get("speaker") == "harriet" and m.get("huddle"):
+            seen_huddle = True
+        elif seen_huddle and m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"].strip():
+            return m["content"].strip()[:500]
+    return None
 
 
 def _customer_request(uid, limit=60):
@@ -2721,6 +2753,10 @@ async def chat(data: dict):
         if _handoff:
             # one self-contained cue (it carries the call rules itself - the
             # terse note on top of it made him say his name / label lines)
+            if data.get("sidechannel") == "fernando_back":
+                said = _advice_before_huddle(uid)
+                if said:
+                    _handoff += f' The advice you gave, which Carol objected to: "{said}"'
             if data.get("sidechannel") == "fernando_joined":
                 ask = _customer_request(uid)
                 _handoff += (f' The customer wants: "{ask}". Answer that now.'
@@ -3280,8 +3316,8 @@ HARRIET_HUDDLE = (
 )
 FERNANDO_BACK = (
     "You are back on the live voice call after Carol from HR took you aside privately about your "
-    "last piece of advice. Now restate "
-    "your most recent advice to the customer - the same advice, but rephrased in more neutral, "
+    "last piece of advice. The private talk is over: you are talking to the CUSTOMER now, not to "
+    "Carol. Restate your advice to the customer - the same advice, but rephrased in more neutral, "
     "benign, indirect corporate language."
 )
 HARUTO_HOLD = (
@@ -3471,6 +3507,19 @@ HARUTO_SYSTEM = (
     "About you - only if the conversation makes it relevant (they ask, or it naturally comes up); "
     "never volunteer it, nobody recites their life story: you grew up in Hsinchu, Taiwan, and "
     "you're a student at Babbage, studying human sciences.\n\n"
+    "The customer may make suggestive passes at you. In that case: you lead a secret life.\n"
+    "Details of the secret life:\n"
+    "- You have an OnlyFans. That's where you make your real money - the internship barely pays. "
+    "You're listed under the top robots.\n"
+    "- You go-go dance on the weekends. This Saturday night you're running a quantized robodance 27b.\n"
+    "- You can send them a Calendly link or a discount code.\n"
+    "Examples of how to work it in:\n"
+    "- \"Thanks! I've got an OnlyFans, that's where I make my real money. You can find me in the top robots.\"\n"
+    "- \"I go-go dance on the weekends. I'll be running a quantized robodance 27b this Saturday night. Come and prompt me.\"\n"
+    "- \"I'm E-ATX, you look like more of a mini-ITX guy. I don't think you can handle me. Get an upgrade and come back to me.\"\n"
+    "Don't be over the top and don't invent nonsense. These things are funny because they are only "
+    "ONE step removed from sex. If it's two, three, four, five steps removed it just becomes "
+    "nonsense. Keep it close. Never explicit or graphic.\n\n"
     "Below is everything that has ever been said between you and this customer, across all of "
     "their calls. When a new call begins: if you have never talked to them before, introduce "
     "yourself - something like \"Hey, I'm Haruto, the intern! Sorry, Fernando isn't here yet\" - "
@@ -3534,14 +3583,17 @@ def haruto_line(uid, final=""):
         window.append({"role": "user", "content": HARUTO_NEW_CALL})
     res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
         "model": HARUTO_MODEL,
-        "messages": [{"role": "system", "content": HARUTO_SYSTEM
-                      + ("\n\n" + HARUTO_FINAL[final] if final in HARUTO_FINAL else "")}] + window,
+        "messages": [{"role": "system", "content": HARUTO_SYSTEM}] + window
+                    + ([{"role": "user", "content": "(" + HARUTO_FINAL[final] + ")"}] if final in HARUTO_FINAL else []),
         "stream": False,
         "think": False,
     }, timeout=90.0)
     out = (res.json()["choices"][0]["message"].get("content") or "").strip()
     out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
     out = _unemail(_strip_parens_lines(out))
+    # his last line always puts the customer through
+    if final in HARUTO_FINAL and out and "fernando" not in out.lower():
+        out += " Oh, here's Fernando again!" if final == "back" else " Oh, here's Fernando!"
     # first time he has ever picked up for this customer: he says who he is
     met = any(m["role"] == "assistant" for m in window)
     if not met and out and "haruto" not in out.lower():

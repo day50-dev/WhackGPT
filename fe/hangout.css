@@ -400,8 +400,8 @@
 .ho.huddle:not(.presenting) .ho-ai > .ho-name { top: 10px; bottom: auto; left: auto; right: 12px; }
 
 /* the forgotten browser tab Fernando's screen share opens on */
-.ho-present-body:has(.ho-browser) { padding: 0; align-items: stretch; justify-content: stretch; }
-.ho-browser { flex: 1; display: flex; flex-direction: column; background: #dee1e6; min-width: 0; }
+.ho-present-body:has(.ho-browser) { padding: 0; align-items: center; justify-content: stretch; }
+.ho-browser { flex: 1 1 auto; width: 100%; display: flex; flex-direction: column; background: #dee1e6; min-width: 0; }
 .ho-br-tabs { display: flex; align-items: flex-end; gap: 8px; padding: 6px 8px 0; color: #5f6368; font-size: 11px; }
 .ho-br-tab {
   display: flex; align-items: center; gap: 8px; max-width: 70%;
@@ -414,6 +414,7 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ho-br-url .fa-lock { color: #5f6368; font-size: 10px; }
-.ho-br-view { flex: 1; min-height: 0; overflow: hidden; background: #fff; position: relative; }
+.ho-br-view { flex: none; overflow: hidden; background: #fff; position: relative; }
+.ho-browser { justify-content: flex-start; background: #dee1e6; }
 .ho-br-page { width: 1280px; height: 800px; transform-origin: 0 0; }
 .ho-br-page img, .ho-br-page iframe { width: 1280px; height: 800px; border: 0; display: block; object-fit: cover; object-position: top left; }
