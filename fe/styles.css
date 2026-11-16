@@ -2214,6 +2214,10 @@ textarea {
   border-radius: 0.6rem;
   overflow: hidden;
   background: #1e1e2a;
+  /* a flex item in the flex-column message list. overflow:hidden drops its
+     automatic min-height to 0, so the column collapses it to its 2px border
+     (the "2 HRs"). Don't let it shrink below its content. */
+  flex-shrink: 0;
 }
 .sc-bar {
   display: flex; align-items: center; gap: 0.5rem;
@@ -2225,7 +2229,12 @@ textarea {
 .sc-open { color: #c9cdd6; opacity: 0.8; text-decoration: none; }
 .sc-open:hover { opacity: 1; }
 .sc-view { background: #000; position: relative; }
-.site-card-yt .sc-view { aspect-ratio: 16 / 9; }
+/* 16:9 via padding, NOT aspect-ratio: the card is a flex item in a flex-column
+   container, and Firefox collapses an aspect-ratio-sized child to 0 there (the
+   whole card shrank to its 2px border - the "2 HRs" bug). padding-bottom makes
+   a real in-flow height the flex item respects. The player/preview is absolute
+   inside (.yt-embed inset:0). */
+.site-card-yt .sc-view { height: 0; padding-bottom: 56.25%; }
 .sc-frame { width: 100%; height: 100%; border: 0; display: block; }
 .site-card:not(.site-card-yt) .sc-frame { height: 420px; background: #fff; }
 
@@ -2242,3 +2251,15 @@ textarea {
 }
 .yt-mute { background: none; border: 0; color: #fff; cursor: pointer; font-size: 0.9rem; padding: 0.1rem 0.25rem; line-height: 1; min-width: 1.1rem; }
 .yt-vol-slider { width: 90px; accent-color: #ff2b2b; height: 3px; cursor: pointer; }
+
+/* static non-autoplaying chat preview: thumbnail + play button */
+.yt-preview { cursor: pointer; }
+.yt-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+.yt-play {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 56px; height: 40px; border: 0; border-radius: 10px;
+  background: rgba(220, 20, 20, 0.92); color: #fff; font-size: 1.1rem;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  padding-left: 3px; transition: background 0.15s;
+}
+.yt-preview:hover .yt-play { background: #ff0000; }

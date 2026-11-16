@@ -4059,6 +4059,34 @@ window.stopVideosIn = function (root) {
   root.querySelectorAll('.yt-embed').forEach(kill);
 };
 
+// A static, NON-autoplaying YouTube preview for the chat: just a thumbnail
+// image and a play button. Tapping it (a user gesture) swaps in the real
+// player, which then plays reliably. Shows even if the YT IFrame API fails.
+function makeYTPreview(videoId, title) {
+  const prev = document.createElement('div');
+  prev.className = 'yt-embed yt-preview';
+  prev.setAttribute('role', 'button');
+  prev.title = title || 'Play video';
+  const img = document.createElement('img');
+  img.className = 'yt-thumb';
+  img.loading = 'lazy';
+  img.alt = title || 'YouTube video';
+  img.src = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg';
+  // if the thumbnail 404s, fall back to the lower-res one that always exists
+  img.onerror = () => { img.onerror = null; img.src = 'https://i.ytimg.com/vi/' + videoId + '/mqdefault.jpg'; };
+  const play = document.createElement('button');
+  play.type = 'button';
+  play.className = 'yt-play';
+  play.innerHTML = '<i class="fas fa-play"></i>';
+  prev.appendChild(img);
+  prev.appendChild(play);
+  prev.addEventListener('click', () => {
+    const player = makeYouTube(videoId, true); // user tapped -> play with sound
+    prev.replaceWith(player);
+  });
+  return prev;
+}
+
 function makeSiteCard(embed, kind, title, pageUrl, autoplay) {
   const card = document.createElement('div');
   card.className = 'site-card' + (kind === 'youtube' ? ' site-card-yt' : '');
@@ -4069,7 +4097,11 @@ function makeSiteCard(embed, kind, title, pageUrl, autoplay) {
   card.querySelector('.sc-url').textContent = pageUrl || embed;
   card.querySelector('.sc-open').href = pageUrl || embed;
   if (kind === 'youtube') {
-    card.querySelector('.sc-view').appendChild(makeYouTube(ytVideoId(embed), autoplay));
+    // In chat a video is NEVER an autoplaying embed - it's a static thumbnail
+    // preview (no API, no audio, works even if the YT player is blocked). A tap
+    // (a real user gesture) swaps in the live player. Autoplay lives only on the
+    // call's shared screen (hangout), never here.
+    card.querySelector('.sc-view').appendChild(makeYTPreview(ytVideoId(embed), title));
     return card;
   }
   const frame = document.createElement('iframe');
