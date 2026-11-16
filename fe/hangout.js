@@ -83,7 +83,7 @@ var Hangout = (function () {
     wrap.querySelector(".ho-br-url span").textContent = pageUrl || embed;
     if (kind === "youtube") {
       // the IFrame-API player (script.js): starts quiet, has a volume slider
-      wrap.querySelector(".ho-br-view").appendChild(window.makeYouTube(window.ytVideoId(embed)));
+      wrap.querySelector(".ho-br-view").appendChild(window.makeYouTube(window.ytVideoId(embed), true));
       return wrap;
     }
     const frame = document.createElement("iframe");
@@ -118,6 +118,9 @@ var Hangout = (function () {
     const starting = !root.classList.contains("presenting");
     setPresenting(true);
     const b = root.querySelector(".ho-present-body");
+    // whatever is about to replace the screen, stop any video playing on it
+    // first - a detached YouTube iframe keeps blaring audio otherwise.
+    if (window.stopVideosIn) window.stopVideosIn(b);
     if (starting && mayOops && Math.random() < OOPS_ODDS) {
       showSite(b, oopsSite());
       oopsUp = true;
@@ -224,7 +227,11 @@ var Hangout = (function () {
 
   function setPresenting(on) {
     root.classList.toggle("presenting", on);
-    if (!on) root.querySelector(".ho-present-body").innerHTML = "";
+    if (!on) {
+      const b = root.querySelector(".ho-present-body");
+      if (window.stopVideosIn) window.stopVideosIn(b);
+      b.innerHTML = "";
+    }
   }
 
   const STATUS = {
@@ -334,6 +341,9 @@ var Hangout = (function () {
       const on = root.classList.contains("presenting");
       const frag = document.createDocumentFragment();
       const b = root.querySelector(".ho-present-body");
+      // stop a playing video before it is detached (a detached iframe keeps
+      // playing) - the stashed screen restores as a still frame, not audio.
+      if (window.stopVideosIn) window.stopVideosIn(b);
       while (on && b.firstChild) frag.appendChild(b.firstChild);
       return { on, who: root.querySelector(".ho-presenter").textContent, frag };
     },

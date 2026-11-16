@@ -2224,7 +2224,7 @@ textarea {
 .sc-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-open { color: #c9cdd6; opacity: 0.8; text-decoration: none; }
 .sc-open:hover { opacity: 1; }
-.sc-view { background: #000; }
+.sc-view { background: #000; position: relative; }
 .site-card-yt .sc-view { aspect-ratio: 16 / 9; }
 .sc-frame { width: 100%; height: 100%; border: 0; display: block; }
 .site-card:not(.site-card-yt) .sc-frame { height: 420px; background: #fff; }

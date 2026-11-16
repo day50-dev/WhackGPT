@@ -1496,6 +1496,26 @@ def _youtube_oembed(watch_url):
         return True, ""  # network hiccup: don't block the video on our check
 
 
+def _yt_id_grounded(uid, vid):
+    """True if this YouTube video id actually turned up somewhere real this
+    conversation - a web_search/web_fetch result, or a URL the user pasted -
+    rather than being pulled from the model's memory. The model has famous
+    ids (Rick Astley etc.) burned in, so 'find me a video' otherwise returns
+    the same joke clip every time. If the id isn't grounded, make it search."""
+    try:
+        for item in rds.lrange(f"sess:{uid}", 0, 60):
+            m = json.loads(html.unescape(item.decode()))
+            c = m.get("content")
+            if m.get("role") == "user" and isinstance(c, str) and vid in c:
+                return True
+            if isinstance(c, dict) and c.get("name") in ("web_search", "web_fetch") \
+                    and vid in (c.get("content") or ""):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 async def handle_tool_call(uid, tc):
     """Run one tool the model asked for, once the stream has finished.
 
@@ -2119,7 +2139,30 @@ async def handle_tool_call(uid, tc):
                 "content": "open_website needs a 'url' - the full link to pull up"}})
             return
         kind, embed, site_url, title = _resolve_website(url, (args.get("title") or "").strip())
+        # dedupe: the model (plus the auto-open net) can fire open_website twice
+        # for the same link in one turn - two identical cards, two autoplaying
+        # videos. If this exact page was just shown, don't show it again.
+        try:
+            for item in rds.lrange(f"sess:{uid}", 0, 5):
+                m = json.loads(html.unescape(item.decode()))
+                c = m.get("content")
+                if isinstance(c, dict) and c.get("name") == "open_website" and c.get("url") == site_url:
+                    return
+        except Exception:
+            pass
         if kind == "youtube":
+            vid = _YT_ID_RE.search(site_url)
+            if vid and not _yt_id_grounded(uid, vid.group(1)):
+                # the model conjured this video id from memory instead of
+                # searching - it is almost always the same famous joke clip.
+                # Reject and make it actually look one up.
+                add_to_session(uid, {"role": "assistant", "content": {
+                    "tool_call_id": tc["id"], "role": "tool", "name": "open_website",
+                    "content": ("Do NOT open a video from memory - that link was not shown. "
+                                "web_search for the video the user actually wants (e.g. its title "
+                                "plus 'youtube'), then call open_website with a watch URL taken "
+                                "from the search results.")}})
+                return
             # check it will actually embed before we put it on screen
             ok, yt_title = await asyncio.to_thread(_youtube_oembed, site_url)
             if not ok:
@@ -2747,6 +2790,23 @@ def _claimed_drawing(text):
     return re.sub(r"^\s*on (?:your|the) screen\s*[:,-]?\s*", "", m.group(0).strip(), flags=re.I)
 
 
+_URL_RE = re.compile(r"https?://\S+", re.I)
+
+
+def _extract_open_url(text):
+    """A call reply that names a URL to pull up ("Open https://... on your
+    screen now") but never called open_website: returns (url, spoken_text)
+    with the raw URL taken out of what gets read aloud (replaced with "it",
+    so TTS doesn't spell out the link). ("", text) if there's no URL."""
+    m = _URL_RE.search(text or "")
+    if not m:
+        return "", text
+    url = m.group(0).rstrip(".,!?;:\"')(<>")
+    spoken = _URL_RE.sub("it", text)
+    spoken = re.sub(r"\s{2,}", " ", spoken).strip()
+    return url, spoken
+
+
 def _now_line(now):
     """The customer's local day and time, sent by their browser ("Sunday
     4:09pm") - the characters keep bringing up mornings and weekends, so
@@ -3368,6 +3428,12 @@ async def chat(data: dict):
                         ttlResponse = _strip_parens_lines(ttlResponse)
                         if _think is False:  # spoken on a call: no "label:" lines, no "Fernando here."
                             ttlResponse = _unlabel_lines(ttlResponse)
+                        # on a call he often SAYS "Open https://... on your screen"
+                        # instead of calling open_website - pull the URL out (so
+                        # TTS won't read the link) and open it ourselves
+                        _open_url = ""
+                        if _think is False and not any(n == "open_website" for n, _ in ran_tools):
+                            _open_url, ttlResponse = _extract_open_url(ttlResponse)
                         if not ttlResponse:
                             break
                         _msg = {"role": "assistant", "content": ttlResponse}
@@ -3376,6 +3442,11 @@ async def chat(data: dict):
                         if _think is False:
                             _msg["call"] = True  # spoken on a live call - no explore/ratings UI
                         add_to_session(uid, _msg)
+                        if _open_url:
+                            print(f"[call] {uid}: said a URL but never called open_website - opening it: {_open_url}")
+                            asyncio.create_task(handle_tool_call(uid, {
+                                "id": "openurl-" + str(int(time.time() * 1000)), "type": "function",
+                                "function": {"name": "open_website", "arguments": json.dumps({"url": _open_url})}}))
                         # on a call he says "on your screen: a diagram of..." but
                         # never drew it: draw what he described, so it's there
                         _claim = _claimed_drawing(ttlResponse) if _think is False else ""

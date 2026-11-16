@@ -347,6 +347,10 @@ function clearAttachments() {
   renderAttachments();
 }
 const messagesContainer = document.getElementById("messagesContainer");
+// Only a video that arrives LIVE (while you're on the page) autoplays. When a
+// thread reloads, its past open_website cards are history - they must sit as a
+// tap-to-play poster, never blast audio on load (two old videos = two audios).
+let _liveReady = false;
 const messageForm = document.getElementById("messageForm");
 const messageInput = document.getElementById("messageInput");
 const sendBtn = document.getElementById("sendBtn");
@@ -641,11 +645,13 @@ function loadChat(chatId) {
     .then((response) => response.json())
     .then((data) => {
       messagesContainer.innerHTML = "";
+      _liveReady = false; // these rows are history - no autoplay
       if (data.res) {
         renderMessages(data.data);
       } else {
         console.error("Failed to load chat history:", data.error);
       }
+      _liveReady = true; // anything appended from here on is live
     })
     .catch((error) => {
       console.error("Error loading chat history:", error);
@@ -789,7 +795,7 @@ function renderMessages(messages, doClear) {
       }
       if (msg.content.name === 'open_website') {
         if (!msg.content.embed) return; // an error note - nothing to show
-        messagesContainer.appendChild(makeSiteCard(msg.content.embed, msg.content.kind, msg.content.title, msg.content.url));
+        messagesContainer.appendChild(makeSiteCard(msg.content.embed, msg.content.kind, msg.content.title, msg.content.url, _liveReady));
         return;
       }
       if (msg.content.name === 'show_code') {
@@ -3982,7 +3988,8 @@ function ytVideoId(embedOrUrl) {
   return m ? m[1] : '';
 }
 // Returns a wrapper element: the player fills it, with a volume bar overlaid.
-function makeYouTube(videoId) {
+function makeYouTube(videoId, autoplay) {
+  autoplay = autoplay !== false; // default true (live arrival / call); history passes false
   const wrap = document.createElement('div');
   wrap.className = 'yt-embed';
   const host = document.createElement('div');
@@ -4007,12 +4014,27 @@ function makeYouTube(videoId) {
   _ensureYTApi(() => {
     player = new YT.Player(host, {
       videoId,
-      playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
+      playerVars: { autoplay: autoplay ? 1 : 0, playsinline: 1, rel: 0, modestbranding: 1 },
       events: {
-        onReady: (e) => { try { e.target.setVolume(YT_START_VOLUME); e.target.unMute(); e.target.playVideo(); } catch (err) {} paint(YT_START_VOLUME, false); },
+        onReady: (e) => {
+          try {
+            e.target.setVolume(YT_START_VOLUME);
+            // only autoplay a live video; history sits paused until tapped, so
+            // it never plays audio on load. Leave it muted-by-default-off here.
+            if (autoplay) { e.target.unMute(); e.target.playVideo(); }
+          } catch (err) {}
+          paint(YT_START_VOLUME, false);
+        },
       },
     });
+    wrap._ytPlayer = player;
   });
+  // detached YouTube iframes keep playing audio - call this before the
+  // screen that holds it is cleared or stashed.
+  wrap._stopYT = () => {
+    try { if (wrap._ytPlayer) { wrap._ytPlayer.stopVideo(); wrap._ytPlayer.destroy(); } } catch (e) {}
+    wrap._ytPlayer = null;
+  };
   slider.addEventListener('input', () => {
     const v = +slider.value;
     if (player) { try { player.setVolume(v); if (v > 0) player.unMute(); else player.mute(); } catch (e) {} }
@@ -4027,7 +4049,17 @@ function makeYouTube(videoId) {
   return wrap;
 }
 
-function makeSiteCard(embed, kind, title, pageUrl) {
+// Stop and tear down any YouTube players inside `root` (and root itself if it
+// is one). Detached iframes keep playing audio, so callers invoke this before
+// clearing/stashing a screen that holds a video.
+window.stopVideosIn = function (root) {
+  if (!root || !root.querySelectorAll) return;
+  const kill = (w) => { if (w && w._stopYT) w._stopYT(); };
+  if (root.classList && root.classList.contains('yt-embed')) kill(root);
+  root.querySelectorAll('.yt-embed').forEach(kill);
+};
+
+function makeSiteCard(embed, kind, title, pageUrl, autoplay) {
   const card = document.createElement('div');
   card.className = 'site-card' + (kind === 'youtube' ? ' site-card-yt' : '');
   card.innerHTML =
@@ -4037,7 +4069,7 @@ function makeSiteCard(embed, kind, title, pageUrl) {
   card.querySelector('.sc-url').textContent = pageUrl || embed;
   card.querySelector('.sc-open').href = pageUrl || embed;
   if (kind === 'youtube') {
-    card.querySelector('.sc-view').appendChild(makeYouTube(ytVideoId(embed)));
+    card.querySelector('.sc-view').appendChild(makeYouTube(ytVideoId(embed), autoplay));
     return card;
   }
   const frame = document.createElement('iframe');
