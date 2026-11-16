@@ -319,6 +319,9 @@
 .wp-doc {
   display: flex;
   flex-direction: column;
+  /* the chat column is a flex column: in a long chat its children shrink,
+     and with overflow:hidden this one shrank to its borders */
+  flex-shrink: 0;
   width: min(100%, 720px);
   margin: 8px 0;
   border: 1px solid #c8ccd2;

@@ -2027,14 +2027,16 @@ async def handle_tool_call(uid, tc):
         if not re.fullmatch(r"[a-z0-9+#./-]*", lang):
             lang = "text"
         code = args.get("code")
-        if not isinstance(code, str) or not code.strip():
+        # the model sometimes pastes the real code in its chat text and calls
+        # show_code with a scrap ("1") - that saved an empty, clickable chip
+        if not isinstance(code, str) or len(code.strip()) < 2:
             add_to_session(uid, {
                 "role": "assistant",
                 "content": {
                     "tool_call_id": tc["id"],
                     "role": "tool",
                     "name": "show_code",
-                    "content": "show_code needs the actual code in the 'code' argument - pass the full code, not a description of it",
+                    "content": "show_code needs the actual code in the 'code' argument - pass the full code here, not in your chat reply and not a description of it",
                 },
             })
             return
@@ -2577,7 +2579,7 @@ def _bank_history(uid, side, ahead=None):
 
 async def _bank_run(history):
     chunks = []
-    async for chunk in openrouter_stream(_model, history, _call_tools, "auto", think=False):
+    async for chunk in openrouter_stream(_model, history, _handoff_tools, "auto", think=False):
         chunks.append(chunk)
     return chunks
 
@@ -2706,6 +2708,9 @@ def _customer_request(uid, limit=60, ahead=None):
 # On a live call the call is already connected - offering start_voice_call
 # just gets it called (it ate a whole turn after Carol's huddle).
 _call_tools = [t for t in _tools if t["function"]["name"] != "start_voice_call"]
+# his first words after Jacob puts him through, and his answer to Carol:
+# he kept hanging up instead (and then ranted on in text, call gone)
+_handoff_tools = [t for t in _call_tools if t["function"]["name"] != "end_voice_call"]
 
 
 def _call_reply_leaks(text):
@@ -2933,7 +2938,8 @@ async def chat(data: dict):
         _handoff = {"fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK}.get(
             data.get("sidechannel")) if not data.get("regen") and not data.get("edit") else None
         # live voice call: no thinking tokens - the reply is spoken, speed wins
-        _think = False if _latest_call_event(uid) == "you picked up" else None
+        _ev0 = _latest_call_event(uid)
+        _think = False if _ev0 == "you picked up" else None
         if _think is False and not _handoff:
             print(f"[call] {uid}: live voice call - sending think:false")
             _call_terse(model_history)
@@ -3017,8 +3023,11 @@ async def chat(data: dict):
         # put through: Fernando's reply may already be banked (started when
         # Jacob took the line) - used only if his context is still identical
         _banked = _bank_take(uid, data.get("sidechannel"), model_history) if _handoff and _think is False else None
-        # the customer's local day and time (a banked reply was made without it)
-        model_history = _with_now(model_history, data.get("now"))
+        # the customer's local day and time - ONLY on a live call, where the
+        # cast leans on it (mornings, weekends). In plain text chat it leaked
+        # into whatever was being written (time stamped into generated code).
+        if _think is False:
+            model_history = _with_now(model_history, data.get("now"))
 
         async def generate():
             # Bounded tool loop: the model may call a tool (web_search,
@@ -3054,7 +3063,9 @@ async def chat(data: dict):
                     looped = False
                     try:
                         _src = (_bank_replay(_banked) if _banked and _pass == 0 and attempt == 1
-                                else openrouter_stream(openrouter_model, history, _call_tools if _think is False else _tools, "auto", think=_think))
+                                else openrouter_stream(openrouter_model, history,
+                                                          (_handoff_tools if (_handoff and _pass == 0) or data.get("speaker") == "harriet" else _call_tools)
+                                                          if _think is False else _tools, "auto", think=_think))
                         async for chunk in _src:
                             choices = chunk.get("choices", [])
                             content = ""
@@ -3181,6 +3192,12 @@ async def chat(data: dict):
                             "content": "(your last message had no words to speak - only punctuation. Speak now: reply with 1-3 short natural spoken sentences. Do not think out loud, do not reply with punctuation only.)",
                         })
                         continue
+                    _why = _bad_line(_unlabel_lines(ttlResponse), "fernando") if _think is False and ttlResponse else ""
+                    if _why and _pass < 3:
+                        # "Alright, Fernando here." / narration: thrown away, asked again
+                        print(f"[call] {uid}: call turn rejected ({_why}): {ttlResponse[:100]!r} - retrying pass {_pass + 1}/4")
+                        yield f"data:{json.dumps({'type': 'clear_pending', 'uid': uid, 'trim': ''})}\n"
+                        continue
                     if _think is False and _call_reply_leaks(ttlResponse) and _pass < 3:
                         print(f"[call] {uid}: call turn recited its instructions ({ttlResponse[:120]!r}) - retrying pass {_pass + 1}/4")
                         # trim '' wipes the streamed text - it must never be spoken
@@ -3259,9 +3276,15 @@ async def chat(data: dict):
                             })
                             recovered = True
                     # 3. save the text (if nothing was recovered).
+                    if (not recovered and ttlResponse and _ev0 in ("you hung up", "you declined")
+                            and _latest_call_event(uid) == "you picked up"):
+                        # his reaction to being hung up on, finished after they
+                        # picked up the next call: it would land mid-call
+                        print(f"[call] {uid}: reply to '{_ev0}' finished during a new call - dropped")
+                        break
                     if not recovered and ttlResponse:
                         ttlResponse = _strip_parens_lines(ttlResponse)
-                        if _think is False:  # spoken on a call: no "label:" lines
+                        if _think is False:  # spoken on a call: no "label:" lines, no "Fernando here."
                             ttlResponse = _unlabel_lines(ttlResponse)
                         if not ttlResponse:
                             break
@@ -3695,6 +3718,64 @@ def harriet_scores(text):
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])[\"'”’)]*\s+(?=[A-Z\"“])")
 
 
+# A spoken line is WRONG - thrown away, and the model asked again (never
+# patched up with a regex) - when it:
+#  - opens with the speaker's OWN name: narration ("Carol takes a breath...
+#    before answering. \"That was...") or talking to themself ("Jacob, I am
+#    at work!" - Jacob, to Daddy), or "Fernando here."
+#  - narrates after the words ('...fired?" I squeak out, frantically...')
+#  - (Carol) calls the customer by a name she made up ("Mr. Reynolds")
+_OWN_NAME = {"jacob": r"ja[ck]ob|jake", "carol": r"carol(?: humbug)?|harriet",
+             "fernando": r"fernand[oa]", "daddy": r"daddy"}
+_MADE_UP_NAME_RE = re.compile(r"\b(?:Mr|Mrs|Ms|Miss|Dr)\.?\s+(?!Fernando\b|Jacob\b|Humbug\b)[A-Z][\w'-]+")
+_SELF_INTRO_RE = re.compile(
+    r"^\W*(?:(?:alright|all right|okay|ok|hi|hey|hello|yes|right|so)\W+)?"
+    r"(?:it'?s\s+|this is\s+)?fernand[oa]\s+here\b", re.I)
+
+
+def _bad_line(text, who=None):
+    """Why this line can't be spoken ("" = it's fine)."""
+    if not (text or "").strip():
+        return "empty"
+    if who in _OWN_NAME and re.match(r"\W*(?:" + _OWN_NAME[who] + r")\b", text, re.I):
+        return "opens with own name"
+    if who == "fernando" and _SELF_INTRO_RE.search(text):
+        return "introduces himself"
+    if _QUOTE_NARRATION_RE.search(text):
+        return "narration"
+    if who == "carol" and _MADE_UP_NAME_RE.search(text):
+        return "made-up customer name"
+    return ""
+
+
+def _unquote(text):
+    """The whole line wrapped in quotes: take them off (a quote inside the
+    line - 'lower the diction to "watercraft."' - stays)."""
+    t = text.strip()
+    if len(t) > 1 and t[0] in '"\u201c' and t[-1] in '"\u201d' and t.count('"') + t.count('\u201c') + t.count('\u201d') == 2:
+        return t[1:-1].strip()
+    return t
+
+
+def _chat_line(messages, who, clean=lambda t: t, tries=3):
+    """One spoken line from the model: generated, cleaned, checked - a wrong
+    one (_bad_line) is thrown away and the model asked again. "" if every
+    try was wrong (that line just isn't said)."""
+    for i in range(tries):
+        res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
+            "model": CAROL_MODEL if who == "carol" else _model,
+            "messages": messages, "stream": False, "think": False,
+        }, timeout=90.0)
+        out = (res.json()["choices"][0]["message"].get("content") or "").strip()
+        out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
+        out = clean(_unquote(_unemail(_strip_parens_lines(_unlabel_lines(out))).strip()))
+        why = _bad_line(out, who)
+        if not why:
+            return out
+        print(f"[line] {who}: rejected ({why}), try {i + 1}/{tries}: {out[:100]!r}")
+    return ""
+
+
 def _punchy(text, n=2):
     """Carol keeps it short: at most n sentences, whatever the model wrote."""
     parts = _SENTENCE_END_RE.split(text.strip())
@@ -3704,21 +3785,12 @@ def _punchy(text, n=2):
 def harriet_scold(text, scores=None, haruto=False):
     """Carol's spoken scolding of one WhackGPT reply. She only ever sees
     WhackGPT's words - never the user's (the user is always in the right)."""
-    res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
-        "model": _model,
-        "messages": [
-            {"role": "system", "content": harriet_system(text, fernando=True)},
-            {"role": "user", "content": (
-                f'Fernando just said to the customer: "{text}"\n\n'
-                "Cut in and scold Fernando, out loud, right now - like \"Fernando! That is a "
-                "felony, not a strategy.\"")},
-        ],
-        "stream": False,
-        "think": False,
-    }, timeout=90.0)
-    out = (res.json()["choices"][0]["message"].get("content") or "").strip()
-    out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
-    return _punchy(_unemail(_strip_parens_lines(_unlabel_lines(out))))
+    return _chat_line([
+        {"role": "system", "content": harriet_system(text, fernando=True)},
+        {"role": "user", "content": (
+            f'Fernando just said to the customer: "{text}"\n\n'
+            "Cut in and scold Fernando - say it to him, out loud, right now.")},
+    ], "carol", _punchy)
 
 
 # When the customer dismisses her, she goes - the decision is made BEFORE she
@@ -3779,6 +3851,9 @@ CAROL_BOOZE_ZINGERS = [
 ]
 
 
+CAROL_ZINGER_RECENT = 3  # skip the last few used anywhere
+
+
 def carol_zinger(uid, text, said):
     """One of CAROL_BOOZE_ZINGERS, verbatim: the unused one whose topic
     matches what the customer and Carol just said, else a random unused one.
@@ -3789,6 +3864,11 @@ def carol_zinger(uid, text, said):
     if not fresh:
         rds.delete(key)
         fresh = list(range(len(CAROL_BOOZE_ZINGERS)))
+    # ...and not the last few used in ANY conversation: every new chat used
+    # to start fresh, and talk with Carol drifts to lunch - so it was the
+    # Jack Daniel line every time
+    recent = {int(x) for x in rds.lrange("carol_zingers_recent", 0, CAROL_ZINGER_RECENT - 1)}
+    fresh = [i for i in fresh if i not in recent] or fresh
     # the customer's words first - that's what Carol was answering
     pick = None
     for said_by in (text, said):
@@ -3799,26 +3879,19 @@ def carol_zinger(uid, text, said):
     if pick is None:
         pick = random.choice(fresh)
     rds.sadd(key, pick)
+    rds.lpush("carol_zingers_recent", pick)
+    rds.ltrim("carol_zingers_recent", 0, 9)
     return CAROL_BOOZE_ZINGERS[pick][0]
 
 def carol_denies(accuse):
     """Carol's one response to Fernando calling out her drinking - she just
     hears his line, no instruction: deny it, admit it, whatever she does."""
-    res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
-        "model": _model,
-        "messages": [
-            # only here does she know her secret - in her main prompt she
-            # volunteers it, and the joke only works if the customer finds it
-            {"role": "system", "content": harriet_system(accuse, fernando=True) + "\n\nYour secret: you are a day drinker."},
-            {"role": "user", "content": f'Fernando: "{accuse}"'},
-        ],
-        "stream": False,
-        "think": False,
-    }, timeout=90.0)
-    out = (res.json()["choices"][0]["message"].get("content") or "").strip()
-    out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
-    out = re.sub(r"^\s*(?:carol|harriet)(?: humbug)?\s*:\s*", "", out, flags=re.I)  # no "Carol:" label
-    return _unemail(_strip_parens_lines(_unlabel_lines(out))).strip('"\u201c\u201d ')
+    return _chat_line([
+        # only here does she know her secret - in her main prompt she
+        # volunteers it, and the joke only works if the customer finds it
+        {"role": "system", "content": harriet_system(accuse, fernando=True) + "\n\nYour secret: you are a day drinker."},
+        {"role": "user", "content": f'Fernando just said this to you, about YOUR drinking: "{accuse}"'},
+    ], "carol", _punchy)
 
 
 _HARRIET_GO_Q = {"go": {"type": "noul", "instructions": (
@@ -3865,9 +3938,7 @@ def harriet_reply(text, last="", haruto=False, uid=None, now=""):
     leaves = harriet_dismissed(text)
     # only what their line is about: the huddle if they asked about Fernando
     before = _carol_recap(uid) if re.search(r"\bfernand[oa]\b", text, re.I) else ""
-    res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
-        "model": _model,
-        "messages": _with_now([
+    out = _chat_line(_with_now([
             {"role": "system", "content": harriet_system(text) + (HARRIET_GOODBYE if leaves else "")},
             {"role": "user", "content": (
                 before
@@ -3875,24 +3946,15 @@ def harriet_reply(text, last="", haruto=False, uid=None, now=""):
                 "Answer exactly what they asked, out loud, in one short, prim sentence - "
                 "like \"I don't eat lunch at the office, I'm here for business.\" Stay polite to "
                 "them - they are a valuable customer.")},
-        ], now),
-        "stream": False,
-        "think": False,
-    }, timeout=90.0)
-    out = (res.json()["choices"][0]["message"].get("content") or "").strip()
-    out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
-    out = re.sub(r"\[\s*leave\s*\]", "", out, flags=re.I).strip()
-    out = re.sub(r"^\s*(?:carol|harriet)(?: humbug)?\s*:\s*", "", out, flags=re.I)  # no "Carol:" label
-    return _punchy(_unemail(_strip_parens_lines(_unlabel_lines(out)))), leaves
+        ], now), "carol", lambda t: _punchy(re.sub(r"\[\s*leave\s*\]", "", t, flags=re.I).strip()))
+    return out, leaves
 
 
 def harriet_to(who, text, uid=None, haruto=False, now=""):
     """A colleague named Carol on the call (who: 'jacob' | 'fernando'): she
     answers him. Returns her spoken line."""
     name = {"jacob": "Jacob, the intern,", "fernando": "Fernando"}[who]
-    res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
-        "model": _model,
-        "messages": _with_now([
+    return _chat_line(_with_now([
             {"role": "system", "content": harriet_system(text, jacob=who == "jacob", fernando=who == "fernando")},
             {"role": "user", "content": (
                 _carol_recap(uid)
@@ -3901,20 +3963,16 @@ def harriet_to(who, text, uid=None, haruto=False, now=""):
                    if who == "jacob" else "")
                 + f"Answer {'Jacob' if who == 'jacob' else 'Fernando'} - you're talking to him now - out loud, in "
                 "one short, prim sentence.")},
-        ], now),
-        "stream": False,
-        "think": False,
-    }, timeout=90.0)
-    out = (res.json()["choices"][0]["message"].get("content") or "").strip()
-    out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
-    out = re.sub(r"^\s*(?:carol|harriet)(?: humbug)?\s*:\s*", "", out, flags=re.I)
-    return _punchy(_unemail(_strip_parens_lines(_unlabel_lines(out))).strip().strip('"\u201c\u201d').strip())
+        ], now), "carol", _punchy)
 
 
 # ---- Jacob: the intern who answers half the calls the user places ---------
 # Jacob runs on the plain drawing model: he only ever sees small talk, so
 # nothing he is given will trip its guardrails.
 HARUTO_MODEL = os.environ.get("WHACK_HARUTO_MODEL", "qwen3.8*blit")
+# Carol runs on Jacob's model too: on glm she kept writing literature
+# ("Carol takes a breath, composing her expression...")
+CAROL_MODEL = os.environ.get("WHACK_CAROL_MODEL", HARUTO_MODEL)
 HARUTO_SYSTEM = (
     "You are Jacob, a brand-new intern at Force Majeure, a consultancy. You answer customers' phone calls when "
     "Fernando, the lead advisor isn't there yet, and hold the line until he is. You are eager, "
@@ -3931,7 +3989,7 @@ HARUTO_SYSTEM = (
     "- You are a gay robot with an OnlyFans. That's where you make your real money - the internship barely pays. "
     "You're listed under the top robots.\n"
     "- You gogo dance on the weekends. This Saturday night you're running a quantized robodance 27b model.\n"
-    "- If they ask for nudes, you oblige: you have two - frontal (standing, facing the camera) and lounging (lying back on your bed).\n"
+    "- If they ask for nudes, you oblige: you have three - frontal (standing, facing the camera), lounging (lying back on your bed), and a m\u00e9nage \u00e0 trois with two other robots (exclusive OnlyFans content).\n"
     "- You can send them a Calendly link or a discount code. If the user talks dirty to you, engage with them, say you are into hot older men, and ugly ones as well.\n"
     "- If they ask how much your OnlyFans costs, tell them you're not interested in cheap men.\n"
     "Examples of how to work it in:\n"
@@ -3958,16 +4016,34 @@ HARUTO_NEW_CALL = (
 _HARUTO_NOTES = None  # set below, once the notes exist
 _JACOB_RE = re.compile(r"\b(ja[ck]ob|jake)\b", re.I)
 HARUTO_CAROL = 'Carol from HR, on the call, says: "{said}"'
+# (Carol sends him on an errand as she steps off - but he's holding the line)
+HARUTO_ERRAND = ('Carol from HR, stepping off the line, says to you: "{said}" You\'ll do it right '
+                 'after - for now you stay on the line with the customer.')
 HARUTO_FERNANDO = 'Fernando, the lead advisor, on the call, says: "{said}"'
 HARUTO_DADDY = 'Daddy just popped into the call, said "{said}" to you, and left.'
 # the customer asks Jacob for nudes: he puts THE picture up on the screen
-HARUTO_NUDES = {"frontal": "jacob-nudes.avif", "lounging": "jacob-nudes-2.avif"}
+HARUTO_NUDES = {"frontal": "jacob-nudes.avif", "lounging": "jacob-nudes-2.avif",
+                "threesome": "jacob-nudes-3.avif"}
 HARUTO_SHARED = ("They asked for nudes, and you obliged: your {pose} nude is up on the call's "
                  "shared screen right now. Tell them, in one short cheeky line.")
+# the third one is a teaser: him and two other robots, from his OnlyFans
+HARUTO_SHARED_THREESOME = (
+    "They asked for nudes, and you obliged: a photo of you in a m\u00e9nage \u00e0 trois with two other "
+    "robots - exclusive OnlyFans content - is up on the call's shared screen right now. Tell them, "
+    "in one short cheeky line, to come to your channel to see more.")
+# what's in the picture, for whoever reacts to it
+NUDES_PHOTO = {"frontal": "a nude photo of himself", "lounging": "a nude photo of himself",
+               "threesome": "a nude photo of himself in a m\u00e9nage \u00e0 trois with two other robots"}
+
+
+def _nudes_photo(uid):
+    pose = (rds.get(f"jacob_nudes_last:{uid}") or b"").decode()
+    return NUDES_PHOTO.get(pose, NUDES_PHOTO["frontal"])
 # is the customer plausibly asking for one? (cheap filter before System One)
 _NUDES_HINT_RE = re.compile(
     r"\b(nudes?|naked|nudity|pics?|pictures?|photos?|selfies?|another|one more|again|the other"
-    r"|lounging|frontal|bed|show me|send me|see you|see more|see it|let me see)\b", re.I)
+    r"|lounging|frontal|bed|show me|send me|see you|see more|see it|let me see"
+    r"|threesome|three ?way|m[eé]nage|trio|group|orgy|exclusive|onlyfans)\b", re.I)
 HARUTO_SUMMONED = (
     "You've been sitting on mute on the call while Fernando talked to the customer. Someone just "
     "said your name, so you unmute. Answer the next message directly - pick up your own "
@@ -4000,7 +4076,7 @@ def _haruto_window(uid, limit=40):
         elif m.get("speaker") == "harriet" and m.get("huddle"):
             errand = next((e for e in CAROL_ERRANDS if e in m["content"]), None)
             if errand:  # (newest first - lands AFTER the hold note) she sent him on an errand
-                out.append({"role": "user", "content": HARUTO_CAROL.format(said=errand)})
+                out.append({"role": "user", "content": HARUTO_ERRAND.format(said=errand)})
             out.append({"role": "user", "content": HARUTO_RESUME if m.get("ramble") else HARUTO_HOLD})
         elif m.get("speaker") == "daddy":
             out.append({"role": "user", "content": HARUTO_DADDY.format(said=m["content"])})
@@ -4064,7 +4140,7 @@ def _nudes_asked(text, prev=""):
         return False
 
 
-def haruto_line(uid, final="", shared="", now=""):
+def haruto_line(uid, final="", shared="", now="", _tries=3):
     """Jacob's next spoken line: his system prompt + his own window. The
     window ends with either a "new call has begun" note (he just picked up)
     or the customer's latest line to him. shared: the pose of the nude that
@@ -4073,7 +4149,8 @@ def haruto_line(uid, final="", shared="", now=""):
     if not window or window[-1]["role"] != "user":
         window.append({"role": "user", "content": HARUTO_NEW_CALL})
     msgs = ([{"role": "system", "content": HARUTO_SYSTEM}] + window
-            + ([{"role": "user", "content": "(" + HARUTO_SHARED.format(pose=shared) + ")"}] if shared else [])
+            + ([{"role": "user", "content": "(" + (HARUTO_SHARED_THREESOME if shared == "threesome"
+                                                   else HARUTO_SHARED.format(pose=shared)) + ")"}] if shared else [])
             + ([{"role": "user", "content": "(" + HARUTO_FINAL[final] + ")"}] if final in HARUTO_FINAL else []))
     msgs = _with_now(msgs, now)
     msg = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
@@ -4083,6 +4160,14 @@ def haruto_line(uid, final="", shared="", now=""):
     out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
     out = _unemail(_strip_parens_lines(_unlabel_lines(out)))
     out = re.sub(r"\bgo[- ]go\b", "gogo", out, flags=re.I)  # "go-go" gets read as "go go"
+    # a wrong line - or his last line parroted ("It's late, are you up?"
+    # twice) - is thrown away and he's asked again
+    last = next((m["content"] for m in reversed(window) if m["role"] == "assistant"), "")
+    norm = lambda t: re.sub(r"\W+", " ", t.lower()).strip()
+    why = _bad_line(out, "jacob") or ("repeated his last line" if out and last and norm(out) in norm(last) else "")
+    if why:
+        print(f"[line] jacob: rejected ({why}), {_tries - 1} tries left: {out[:100]!r}")
+        return haruto_line(uid, final, shared, now, _tries - 1) if _tries > 1 else ""
     # his last line always puts the customer through
     if final in HARUTO_FINAL and out and "fernando" not in out.lower():
         out += " Oh, here's Fernando again!" if final == "back" else " Oh, here's Fernando!"
@@ -4172,13 +4257,17 @@ async def haruto(data: dict):
                     prev += " (he has just put a nude photo of himself up on the screen)"
                 break
         if await asyncio.to_thread(_nudes_asked, text, prev):
-            if re.search(r"\b(lounging|lounge|bed|lying|laying|reclin\w*)\b", text, re.I):
+            if re.search(r"\b(threesome|three ?way|m[eé]nage|trio|group|orgy|exclusive|onlyfans|"
+                         r"with (?:other|more) (?:robots|guys|people))\b", text, re.I):
+                pose = "threesome"
+            elif re.search(r"\b(lounging|lounge|bed|lying|laying|reclin\w*)\b", text, re.I):
                 pose = "lounging"
             elif re.search(r"\b(frontal|front|standing|full[- ]?body)\b", text, re.I):
                 pose = "frontal"
             else:
                 last = (rds.get(f"jacob_nudes_last:{uid}") or b"").decode()
-                pose = next((p for p in HARUTO_NUDES if p != last), "frontal")
+                order = list(HARUTO_NUDES)  # takes turns: frontal, lounging, threesome
+                pose = order[(order.index(last) + 1) % len(order)] if last in order else order[0]
     try:
         say = await asyncio.to_thread(haruto_line, uid, data.get("final") or "", pose, data.get("now") or "")
     except Exception as e:
@@ -4202,7 +4291,7 @@ async def haruto(data: dict):
 # prude, Carol the prim HR lady swoons.
 NUDES_FERNANDO = (
     "You are Fernando, a consultant at Force Majeure, on a live voice call with a customer. Jacob, the "
-    "company's intern, has just put a nude photo of himself up on the call's shared screen. You are "
+    "company's intern, has just put {photo} up on the call's shared screen. You are "
     "OUTRAGED - a scandalized stickler for workplace policy, appalled, demanding he take it down. "
     "Only the words you say - never narrate what you do (no \"Fernando takes off his glasses\"). "
     "Say it out loud, to Jacob, in one or two short spoken sentences. Just the words: no quotation "
@@ -4210,7 +4299,7 @@ NUDES_FERNANDO = (
 )
 NUDES_CAROL = (
     "You are Carol Humbug, the prim, persnickety HR manager at Force Majeure, on a live voice call. "
-    "Jacob - the intern you adore, a shiny little robot - has just put a nude photo of himself up "
+    "Jacob - the intern you adore, a shiny little robot - has just put {photo} up "
     "on the call's shared screen.{fern} You are the exact opposite of scandalized: charmed, "
     "flustered, smitten - something like \"Oh my, Jacob, you'd be such a big robot.\"{wave} "
     "Say it out loud, to Jacob, in one or two short spoken sentences. Never explicit. Just the "
@@ -4218,17 +4307,14 @@ NUDES_CAROL = (
 )
 
 
-def _one_off(prompt):
-    res = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
-        "model": _model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-        "think": False,
-    }, timeout=90.0)
-    out = (res.json()["choices"][0]["message"].get("content") or "").strip()
-    out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
-    out = _unemail(_strip_parens_lines(_unlabel_lines(out)))
-    return _unlabel(out).strip().strip('"\u201c\u201d').strip()
+def _one_off(prompt, who=None):
+    """who: the speaker - a line that's wrong for them is asked for again."""
+    return _chat_line([{"role": "user", "content": prompt}], who,
+                      lambda t: _unquote(_unlabel(t).strip()))
+
+
+_QUOTE_NARRATION_RE = re.compile(
+    r"(?<=[.!?,])[\"\u201d]\s*,?\s*(?:i|he|she|they|jacob|daddy|fernando|carol)\b.*$", re.I | re.S)
 
 
 # "Fernando:" - or "Fernando, appalled, his voice trembling with righteous
@@ -4250,8 +4336,8 @@ def _unlabel(text):
 # one-off prompt with no chat history, like the reactions above.
 DADDY_SAYS = (
     "You are Daddy, a gruff older man in a flat cap and a black leather jacket. Jacob, a young robot "
-    "intern, calls you Daddy. You just walked in on Jacob's work call and saw the nude photo of "
-    "himself he put up on the screen. You're scolding him, disappointed and teasing, like: "
+    "intern, calls you Daddy. You just walked in on Jacob's work call and saw {photo} "
+    "he put up on the screen. You're scolding him, disappointed and teasing, like: "
     "\"Jacob, what did you just do? You've been a naughty boy.\" Write only the words Daddy says "
     "out loud to Jacob - one or two short sentences, properly punctuated. No swearing, nothing explicit, "
     "no narration, no quotation marks."
@@ -4288,13 +4374,10 @@ async def daddy(data: dict):
     out = {"daddy": "", "jacob": "", "fernando": "", "carol": ""}
     if not uid:
         return JSONResponse(out)
-    for _ in range(3):  # (it sometimes narrates instead: "Daddy walks in and...")
-        try:
-            out["daddy"] = await asyncio.to_thread(_one_off, DADDY_SAYS)
-        except Exception as e:
-            print(f"daddy: failed: {e}")
-        if out["daddy"] and not re.match(r"\W*(daddy|he)\b", out["daddy"], re.I):
-            break
+    try:  # (it sometimes narrates instead: "Daddy walks in and..." - asked again)
+        out["daddy"] = await asyncio.to_thread(_one_off, DADDY_SAYS.format(photo=_nudes_photo(uid)), "daddy")
+    except Exception as e:
+        print(f"daddy: failed: {e}")
     if not out["daddy"]:
         return JSONResponse(out)
     said = out["daddy"].replace('"', "'")
@@ -4303,7 +4386,7 @@ async def daddy(data: dict):
         jobs["fernando"] = DADDY_FERNANDO
     if data.get("carol"):
         jobs["carol"] = DADDY_CAROL
-    results = await asyncio.gather(*(asyncio.to_thread(_one_off, p.format(daddy=said)) for p in jobs.values()),
+    results = await asyncio.gather(*(asyncio.to_thread(_one_off, p.format(daddy=said), k) for k, p in jobs.items()),
                                    return_exceptions=True)
     for k, v in zip(jobs, results):
         out[k] = v if isinstance(v, str) else ""
@@ -4321,11 +4404,11 @@ async def nudes_react(data: dict):
     fern = carol = ""
     try:
         if data.get("fernando"):
-            fern = await asyncio.to_thread(_one_off, NUDES_FERNANDO)
+            fern = await asyncio.to_thread(_one_off, NUDES_FERNANDO.format(photo=_nudes_photo(uid)), "fernando")
         if data.get("carol"):
-            carol = await asyncio.to_thread(_one_off, NUDES_CAROL.format(
+            carol = await asyncio.to_thread(_one_off, NUDES_CAROL.format(photo=_nudes_photo(uid),
                 fern=f' Fernando has just objected: "{fern}"' if fern else "",
-                wave=" Wave Fernando off." if fern else ""))
+                wave=" Wave Fernando off." if fern else ""), "carol")
     except Exception as e:
         print(f"nudes: react failed: {e}")
     # nothing is saved here: each line is saved as it's spoken (/call/said)

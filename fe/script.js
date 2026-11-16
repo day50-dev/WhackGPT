@@ -2043,7 +2043,27 @@ function harutoSummoned(text, by, saved, pre) {
 // off in a huddle), swoons. Then Daddy pops in (once a call).
 function jacobShares(call, file) {
   if (_call !== call) return;
+  // what was up before goes back when he pulls it down (a second photo in
+  // the same round keeps the original)
+  if (!call.nudesUp) { call.nudesUp = true; call.nudesPrev = Hangout.stash(); }
   Hangout.presentNode(makeImg(file), true, 'Jacob');
+}
+// The round is over: Jacob pulls the photo down - the screen goes back to
+// whatever was up before - with a sheepish line, then `then` carries on.
+var JACOB_PULLS_IT = [
+  "Sorry about that. That wasn't supposed to be free.",
+  "Oops, sorry. That one's supposed to be behind the paywall.",
+  "Sorry, sorry. That was premium content.",
+];
+function jacobPullsIt(call, then) {
+  if (_call !== call) return;
+  if (!call.nudesUp) { then(); return; }
+  call.nudesUp = false;
+  Hangout.unstash(call.nudesPrev);
+  call.nudesPrev = null;
+  const line = JACOB_PULLS_IT[Math.floor(Math.random() * JACOB_PULLS_IT.length)];
+  lineSaid('haruto', line);
+  harutoSpeak(line, then);
 }
 // the reactions AND Daddy's beat, requested together the moment Jacob's
 // line with the picture arrives. fern / carol: who'll be on the line.
@@ -2059,7 +2079,8 @@ function nudesFetch(call, fern, carol) {
 function nudesReact(call, after, pre) {
   if (_call !== call) return;
   pre = pre || nudesFetch(call, fernandoOn(call), carolOn(call));
-  const then = () => daddyBeat(call, after, pre.daddy); // ...and then Daddy pops in
+  // ...then Daddy pops in, then Jacob takes the photo down
+  const then = () => daddyBeat(call, () => jacobPullsIt(call, after), pre.daddy);
   if (!pre.react) { then(); return; }
   call.heard = '';
   callSet('thinking');
@@ -3819,6 +3840,7 @@ function cpSendYell() {
 }
 
 function openCodePanel(language, code) {
+  if (!code || String(code).trim().length < 2) return; // nothing real to show
   const el = codePanelEl();
   _codePanel.language = language || 'text';
   _codePanel.code = String(code || '');
@@ -3912,6 +3934,9 @@ function makeDoc(title, markdown, onCall) {
 }
 
 function showCodeChip(container, language, code) {
+  // a past show_code whose code is empty/trivial (the model passed a scrap
+  // like "1") would open a blank panel - don't render a chip for it
+  if (!code || String(code).trim().length < 2) return;
   const chip = document.createElement('button');
   chip.type = 'button';
   chip.className = 'code-chip';

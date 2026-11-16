@@ -292,5 +292,27 @@ var Hangout = (function () {
       oopsCancel(); // an image failed - the tab goes too
       setPresenting(false);
     },
+    // Take whatever is on the shared screen down, keeping it to put back
+    // later (Jacob's photo goes up over it for one round).
+    stash() {
+      if (!open) return null;
+      oopsCancel();
+      const on = root.classList.contains("presenting");
+      const frag = document.createDocumentFragment();
+      const b = root.querySelector(".ho-present-body");
+      while (on && b.firstChild) frag.appendChild(b.firstChild);
+      return { on, who: root.querySelector(".ho-presenter").textContent, frag };
+    },
+    // ...and put it back (nothing was up: back to the faces)
+    unstash(snap) {
+      if (!open) return;
+      oopsCancel();
+      if (!snap || !snap.on) { setPresenting(false); return; }
+      root.querySelector(".ho-presenter").textContent = snap.who;
+      setPresenting(true);
+      const b = root.querySelector(".ho-present-body");
+      b.innerHTML = "";
+      b.appendChild(snap.frag);
+    },
   };
 })();
