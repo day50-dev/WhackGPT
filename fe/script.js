@@ -1573,6 +1573,9 @@ function callReply(text) {
     if (text || _call.heldReply === undefined) _call.heldReply = text;
     return;
   }
+  // a line that starts with a label - "greeting:", "[start_voice_call]greeting:"
+  // (one token, no spaces, then a colon) - is said without it
+  if (text) text = text.replace(/^[^\s]+:[ \t]*/gm, '');
   // A reply with no actual words ('...', '…', '!!') has nothing for TTS - it
   // would speak a silence blip. The server already retried these; if one
   // still slips through, keep the line open instead of speaking it.
@@ -1763,7 +1766,7 @@ function harrietReview(text) {
     headers: { 'Content-Type': 'application/json' },
     // Fernando's words only. huddle_ok: the private-talk intervention happens
     // at most once a call
-    body: JSON.stringify({ uid: _uid, text, haruto: !!call.harutoQuiet, huddle_ok: !call.huddled,
+    body: JSON.stringify({ uid: _uid, text, now: localNow(), haruto: !!call.harutoQuiet, huddle_ok: !call.huddled,
       named: HARRIET_NAME.test(text) && (call.hops || 0) < MAX_HOPS }),
   })
     .then((r) => r.json())
@@ -1787,6 +1790,7 @@ function harrietReview(text) {
 // The helpers below START a request and return what to do when the current
 // voice is done.
 function postJSON(url, body) {
+  body = Object.assign({ now: localNow() }, body);
   return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then((r) => r.json());
 }
@@ -2452,6 +2456,15 @@ function _keepChannel(sock, uid, delay) {
   sock.addEventListener('open', () => { delay = 1000; });
 }
 
+// The customer's local day and time - "Sunday 4:09pm" - sent with every
+// turn so the characters' mornings and weekends are the real ones
+function localNow() {
+  const d = new Date();
+  const day = d.toLocaleDateString('en-US', { weekday: 'long' });
+  const h = d.getHours();
+  return day + ' ' + (h % 12 || 12) + ':' + String(d.getMinutes()).padStart(2, '0') + (h >= 12 ? 'pm' : 'am');
+}
+
 async function sendMessage(regenText, isRegen, isEdit, originalText, opts) {
   const speaker = opts && opts.speaker;
   const text = regenText !== undefined ? regenText : messageInput.value.trim();
@@ -2464,7 +2477,7 @@ async function sendMessage(regenText, isRegen, isEdit, originalText, opts) {
     messageInput.style.height = "auto";
   }
 
-  let body = { uid: _uid, text, user: _user };
+  let body = { uid: _uid, text, user: _user, now: localNow() };
   if (speaker) body.speaker = speaker;
   if (opts && opts.sidechannel) body.sidechannel = opts.sidechannel;
   if (opts && opts.saved) body.saved = true; // (Carol's line is already in the chat)
