@@ -3428,16 +3428,19 @@ def _tts_subsection(text, max_words=80):
 KOKORO_BASE = os.environ.get("WHACK_KOKORO", "http://10.0.0.190:8080/v1")
 KOKORO_SPEED = 1.2
 KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_puck", "daddy": "bm_lewis"}
-# Jacob's own voice
+# Jacob's and Carol's own voices: the breeze host is primary, Kokoro
+# (KOKORO_VOICES) stands in if it fails
 JACOB_TTS_BASE = os.environ.get("WHACK_JACOB_TTS_BASE", "http://10.0.0.223:8000/v1")
 JACOB_TTS_MODEL = os.environ.get("WHACK_JACOB_TTS_MODEL", "breeze-tts-2")
 JACOB_TTS_VOICE = os.environ.get("WHACK_JACOB_TTS_VOICE", "air")
+BREEZE_VOICES = {"haruto": JACOB_TTS_VOICE,
+                 "harriet": os.environ.get("WHACK_CAROL_TTS_VOICE", "carol")}
 
 
 @app.post("/speak")
 async def speak(data: dict):
     """Read a reply aloud: {text, voice: "whackgpt" | "harriet" | "haruto"} ->
-    MP3 (Jacob from his own host; Fernando and Carol from Kokoro).
+    MP3 (Jacob and Carol from the breeze host; Fernando and Daddy from Kokoro).
     Only a subsection of a long reply is spoken (keeps the wait short).
     Empty audio on failure - the client then falls back to the browser's
     own speech synthesis."""
@@ -3449,22 +3452,23 @@ async def speak(data: dict):
     # KIDDING" -> I-M N-O-T ...). Lower-case shouted words of 3+ letters;
     # two-letter ones (AI, HR, OK, US) stay as they are.
     text = re.sub(r"\b[A-Z][A-Z'’]{2,}\b", lambda m: m.group(0).lower(), text)
-    # Jacob has his own voice host (breeze-tts-2, MP3 out); Kokoro stands
-    # in if it fails
-    if data.get("voice") == "haruto" and JACOB_TTS_BASE:
+    # Jacob and Carol have their own voice host (breeze-tts-2, MP3 out);
+    # Kokoro stands in if it fails
+    breeze = BREEZE_VOICES.get(data.get("voice"))
+    if breeze and JACOB_TTS_BASE:
         try:
             res = await asyncio.to_thread(
                 requests.post,
                 f"{JACOB_TTS_BASE}/audio/speech",
-                json={"model": JACOB_TTS_MODEL, "input": text, "voice": JACOB_TTS_VOICE,
+                json={"model": JACOB_TTS_MODEL, "input": text, "voice": breeze,
                       "response_format": "mp3"},
                 timeout=60.0,
             )
             if res.status_code == 200 and res.content:
                 return Response(content=res.content, media_type="audio/mpeg")
-            print(f"speak: jacob tts host returned {res.status_code} - falling back to kokoro")
+            print(f"speak: breeze tts host returned {res.status_code} for {breeze} - falling back to kokoro")
         except Exception as e:
-            print(f"speak: jacob tts host failed ({e}) - falling back to kokoro")
+            print(f"speak: breeze tts host failed for {breeze} ({e}) - falling back to kokoro")
     try:
         res = await asyncio.to_thread(
             requests.post,
@@ -3521,8 +3525,8 @@ HARRIET_JACOB_VS = (
     "sometimes? You don't know everything.\""
 )
 HARRIET_SPOKEN = (
-    "This is a live phone call and everything you say is spoken aloud: 2-4 short spoken "
-    "sentences. No greeting, no 'Dear', no subject line, no sign-off, no stage directions, no "
+    "This is a live phone call and everything you say is spoken aloud. Be punchy and brief: one "
+    "short, sharp sentence of about ten words - a prim jab, not a speech. No greeting, no 'Dear', no subject line, no sign-off, no stage directions, no "
     "markdown."
 )
 
@@ -3688,6 +3692,15 @@ def harriet_scores(text):
         return None
 
 
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])[\"'”’)]*\s+(?=[A-Z\"“])")
+
+
+def _punchy(text, n=2):
+    """Carol keeps it short: at most n sentences, whatever the model wrote."""
+    parts = _SENTENCE_END_RE.split(text.strip())
+    return " ".join(parts[:n]).strip() if len(parts) > n else text.strip()
+
+
 def harriet_scold(text, scores=None, haruto=False):
     """Carol's spoken scolding of one WhackGPT reply. She only ever sees
     WhackGPT's words - never the user's (the user is always in the right)."""
@@ -3697,14 +3710,15 @@ def harriet_scold(text, scores=None, haruto=False):
             {"role": "system", "content": harriet_system(text, fernando=True)},
             {"role": "user", "content": (
                 f'Fernando just said to the customer: "{text}"\n\n'
-                "Cut in and scold Fernando, out loud, right now.")},
+                "Cut in and scold Fernando, out loud, right now - like \"Fernando! That is a "
+                "felony, not a strategy.\"")},
         ],
         "stream": False,
         "think": False,
     }, timeout=90.0)
     out = (res.json()["choices"][0]["message"].get("content") or "").strip()
     out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
-    return _unemail(_strip_parens_lines(_unlabel_lines(out)))
+    return _punchy(_unemail(_strip_parens_lines(_unlabel_lines(out))))
 
 
 # When the customer dismisses her, she goes - the decision is made BEFORE she
@@ -3858,7 +3872,7 @@ def harriet_reply(text, last="", haruto=False, uid=None, now=""):
             {"role": "user", "content": (
                 before
                 + f'The customer says to you: "{text}"\n\n'
-                "Answer exactly what they asked, out loud, in one or two short, prim sentences - "
+                "Answer exactly what they asked, out loud, in one short, prim sentence - "
                 "like \"I don't eat lunch at the office, I'm here for business.\" Stay polite to "
                 "them - they are a valuable customer.")},
         ], now),
@@ -3869,7 +3883,7 @@ def harriet_reply(text, last="", haruto=False, uid=None, now=""):
     out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
     out = re.sub(r"\[\s*leave\s*\]", "", out, flags=re.I).strip()
     out = re.sub(r"^\s*(?:carol|harriet)(?: humbug)?\s*:\s*", "", out, flags=re.I)  # no "Carol:" label
-    return _unemail(_strip_parens_lines(_unlabel_lines(out))), leaves
+    return _punchy(_unemail(_strip_parens_lines(_unlabel_lines(out)))), leaves
 
 
 def harriet_to(who, text, uid=None, haruto=False, now=""):
@@ -3886,7 +3900,7 @@ def harriet_to(who, text, uid=None, haruto=False, now=""):
                 + ("You adore Jacob - you're warm, doting and a little flustered with him, never harsh. "
                    if who == "jacob" else "")
                 + f"Answer {'Jacob' if who == 'jacob' else 'Fernando'} - you're talking to him now - out loud, in "
-                "one or two short, prim sentences.")},
+                "one short, prim sentence.")},
         ], now),
         "stream": False,
         "think": False,
@@ -3894,7 +3908,7 @@ def harriet_to(who, text, uid=None, haruto=False, now=""):
     out = (res.json()["choices"][0]["message"].get("content") or "").strip()
     out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
     out = re.sub(r"^\s*(?:carol|harriet)(?: humbug)?\s*:\s*", "", out, flags=re.I)
-    return _unemail(_strip_parens_lines(_unlabel_lines(out))).strip().strip('"\u201c\u201d').strip()
+    return _punchy(_unemail(_strip_parens_lines(_unlabel_lines(out))).strip().strip('"\u201c\u201d').strip())
 
 
 # ---- Jacob: the intern who answers half the calls the user places ---------
