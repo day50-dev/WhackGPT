@@ -425,6 +425,14 @@
 .ho-browser { justify-content: flex-start; background: #dee1e6; }
 .ho-br-page { width: 1280px; height: 800px; transform-origin: 0 0; }
 .ho-br-page img, .ho-br-page iframe { width: 1280px; height: 800px; border: 0; display: block; object-fit: cover; object-position: top left; }
+/* open_website: a LIVE iframe fills the view (not a scaled 1280x800 shot) */
+.ho-browser-live .ho-br-view { flex: 1 1 auto; display: flex; }
+.ho-br-frame { flex: 1 1 auto; width: 100%; height: 100%; border: 0; background: #fff; }
+/* a YouTube video: a proper 16:9 that fills the WIDTH and centres, instead of
+   a landscape video floating small inside the tall screen-share frame */
+.ho-browser-yt { flex: 0 1 auto; align-self: center; }
+.ho-browser-yt .ho-br-view { flex: 0 0 auto; display: block; width: 100%; aspect-ratio: 16 / 9; max-height: 100%; background: #000; }
+.ho-browser-yt .ho-br-view .yt-embed { width: 100%; height: 100%; }
 
 /* ---- Daddy: pops into the call after Jacob's nudes, then leaves ---- */
 /* left column, centred between Jacob (top-left) and Carol (bottom-left) */

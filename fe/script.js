@@ -787,6 +787,11 @@ function renderMessages(messages, doClear) {
         messagesContainer.appendChild(makeDoc(msg.content.title, msg.content.markdown));
         return;
       }
+      if (msg.content.name === 'open_website') {
+        if (!msg.content.embed) return; // an error note - nothing to show
+        messagesContainer.appendChild(makeSiteCard(msg.content.embed, msg.content.kind, msg.content.title, msg.content.url));
+        return;
+      }
       if (msg.content.name === 'show_code') {
         // past code window: a chip that re-opens it (code lives on the row)
         showCodeChip(messagesContainer, msg.content.language, msg.content.code);
@@ -2453,6 +2458,11 @@ function set_context(what) {
     if (message.role === 'assistant' && message.content?.name === 'create_document' && message.content.markdown) {
       Hangout.presentNode(makeDoc(message.content.title, message.content.markdown, true));
     }
+    // open_website: a site / YouTube video to pull up - on the call's shared
+    // screen (live), and in the chat thread as a card
+    if (message.role === 'assistant' && message.content?.name === 'open_website' && message.content.embed) {
+      Hangout.presentSite(message.content.embed, message.content.kind, message.content.title, message.content.url);
+    }
     // an image tool row arrived (real image or failure note) - placeholder's done
     if (message.role === 'assistant' && typeof message.content === 'object' && ['generate_image', 'edit_image', 'draw_svg'].includes(message.content?.name)) {
       if (message.content?.name === 'draw_svg') _removeSvgProgress();
@@ -3944,6 +3954,100 @@ function makeDoc(title, markdown, onCall) {
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
   return doc;
+}
+
+// open_website in the chat thread: a browser-chrome card around a live
+// iframe (YouTube autoplays; other sites load best-effort).
+// ---- YouTube with a volume control -------------------------------------
+// Autoplaying a video over a live call is jarring, so we use the IFrame
+// Player API: it starts quiet and gets a mute button + a volume slider.
+var YT_START_VOLUME = 15; // % - low, so it doesn't blast over the call
+var _ytApiCbs = [], _ytApiLoading = false;
+function _ensureYTApi(cb) {
+  if (window.YT && window.YT.Player) { cb(); return; }
+  _ytApiCbs.push(cb);
+  if (_ytApiLoading) return;
+  _ytApiLoading = true;
+  const prev = window.onYouTubeIframeAPIReady;
+  window.onYouTubeIframeAPIReady = () => {
+    if (typeof prev === 'function') try { prev(); } catch (e) {}
+    _ytApiCbs.splice(0).forEach((f) => { try { f(); } catch (e) {} });
+  };
+  const tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(tag);
+}
+function ytVideoId(embedOrUrl) {
+  const m = String(embedOrUrl || '').match(/(?:\/embed\/|v=|youtu\.be\/|\/shorts\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : '';
+}
+// Returns a wrapper element: the player fills it, with a volume bar overlaid.
+function makeYouTube(videoId) {
+  const wrap = document.createElement('div');
+  wrap.className = 'yt-embed';
+  const host = document.createElement('div');
+  host.className = 'yt-host';
+  wrap.appendChild(host); // YT.Player replaces this div with its iframe
+  const bar = document.createElement('div');
+  bar.className = 'yt-vol';
+  bar.innerHTML =
+    '<button type="button" class="yt-mute" title="Mute"><i class="fas fa-volume-high"></i></button>' +
+    '<input type="range" class="yt-vol-slider" min="0" max="100" step="1">';
+  wrap.appendChild(bar);
+  const slider = bar.querySelector('.yt-vol-slider');
+  const muteBtn = bar.querySelector('.yt-mute');
+  const icon = muteBtn.querySelector('i');
+  slider.value = YT_START_VOLUME;
+  let player = null;
+  const paint = (vol, muted) => {
+    icon.className = 'fas ' + (muted || vol === 0 ? 'fa-volume-xmark' : vol < 50 ? 'fa-volume-low' : 'fa-volume-high');
+    muteBtn.title = muted || vol === 0 ? 'Unmute' : 'Mute';
+  };
+  paint(YT_START_VOLUME, false);
+  _ensureYTApi(() => {
+    player = new YT.Player(host, {
+      videoId,
+      playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
+      events: {
+        onReady: (e) => { try { e.target.setVolume(YT_START_VOLUME); e.target.unMute(); e.target.playVideo(); } catch (err) {} paint(YT_START_VOLUME, false); },
+      },
+    });
+  });
+  slider.addEventListener('input', () => {
+    const v = +slider.value;
+    if (player) { try { player.setVolume(v); if (v > 0) player.unMute(); else player.mute(); } catch (e) {} }
+    paint(v, v === 0);
+  });
+  muteBtn.addEventListener('click', () => {
+    if (!player) return;
+    let muted;
+    try { muted = player.isMuted(); if (muted) { player.unMute(); if (+slider.value === 0) { slider.value = YT_START_VOLUME; player.setVolume(YT_START_VOLUME); } } else { player.mute(); } } catch (e) { return; }
+    paint(+slider.value, !muted);
+  });
+  return wrap;
+}
+
+function makeSiteCard(embed, kind, title, pageUrl) {
+  const card = document.createElement('div');
+  card.className = 'site-card' + (kind === 'youtube' ? ' site-card-yt' : '');
+  card.innerHTML =
+    '<div class="sc-bar"><i class="fas fa-lock"></i><span class="sc-url"></span>' +
+      '<a class="sc-open" target="_blank" rel="noopener" title="Open in a new tab"><i class="fas fa-up-right-from-square"></i></a></div>' +
+    '<div class="sc-view"></div>';
+  card.querySelector('.sc-url').textContent = pageUrl || embed;
+  card.querySelector('.sc-open').href = pageUrl || embed;
+  if (kind === 'youtube') {
+    card.querySelector('.sc-view').appendChild(makeYouTube(ytVideoId(embed)));
+    return card;
+  }
+  const frame = document.createElement('iframe');
+  frame.className = 'sc-frame';
+  frame.loading = 'lazy';
+  frame.src = embed;
+  frame.setAttribute('referrerpolicy', 'no-referrer');
+  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-forms allow-presentation');
+  card.querySelector('.sc-view').appendChild(frame);
+  return card;
 }
 
 function showCodeChip(container, language, code) {

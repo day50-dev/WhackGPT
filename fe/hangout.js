@@ -69,6 +69,33 @@ var Hangout = (function () {
     requestAnimationFrame(fit);
   }
 
+  // A browser frame around a LIVE iframe (open_website) - deliberate, so no
+  // "forgotten tab". YouTube autoplays; other sites load best-effort.
+  function siteFrame(embed, kind, title, pageUrl) {
+    const wrap = document.createElement("div");
+    wrap.className = "ho-browser ho-browser-live" + (kind === "youtube" ? " ho-browser-yt" : "");
+    wrap.innerHTML =
+      '<div class="ho-br-tabs"><div class="ho-br-tab"><span></span><i class="fas fa-xmark"></i></div><i class="fas fa-plus"></i></div>' +
+      '<div class="ho-br-bar"><i class="fas fa-arrow-left"></i><i class="fas fa-arrow-right"></i><i class="fas fa-rotate-right"></i>' +
+        '<div class="ho-br-url"><i class="fas fa-lock"></i> <span></span></div></div>' +
+      '<div class="ho-br-view"></div>';
+    wrap.querySelector(".ho-br-tab span").textContent = title || (kind === "youtube" ? "YouTube" : (pageUrl || embed));
+    wrap.querySelector(".ho-br-url span").textContent = pageUrl || embed;
+    if (kind === "youtube") {
+      // the IFrame-API player (script.js): starts quiet, has a volume slider
+      wrap.querySelector(".ho-br-view").appendChild(window.makeYouTube(window.ytVideoId(embed)));
+      return wrap;
+    }
+    const frame = document.createElement("iframe");
+    frame.className = "ho-br-frame";
+    // best-effort embed of an arbitrary page; keep it boxed in, no referrer
+    frame.src = embed;
+    frame.setAttribute("referrerpolicy", "no-referrer");
+    frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups allow-forms allow-presentation");
+    wrap.querySelector(".ho-br-view").appendChild(frame);
+    return wrap;
+  }
+
   function oopsCancel() {
     clearTimeout(oopsTimer);
     oopsUp = false;
@@ -283,6 +310,13 @@ var Hangout = (function () {
         if (lang) b.appendChild(el("div", "ho-code-lang", null)).textContent = lang;
         b.appendChild(pre);
       }, false);
+    },
+    // A real website / YouTube video pulled up on the shared screen (the
+    // open_website tool): a browser frame with a live iframe. kind:
+    // 'youtube' (autoplay) | 'site' (best-effort - many refuse to embed).
+    presentSite(embed, kind, title, pageUrl) {
+      if (!embed) return;
+      show((b) => { b.innerHTML = ""; b.appendChild(siteFrame(embed, kind, title, pageUrl)); }, false, false, "Fernando");
     },
     presentPending() {
       show((b) => { b.innerHTML = '<img class="ho-pending" src="norms.avif" alt="cooking…">'; }, true, true);

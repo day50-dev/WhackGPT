@@ -405,6 +405,26 @@ _tools =  [{
 }, {
     "type": "function",
     "function": {
+        "name": "open_website",
+        "description": "Pull up a real website or YouTube video on the user's screen - on a voice call it appears on the shared screen you're presenting, otherwise as an embedded player in the chat. Use it to show something off: a YouTube video (it actually plays), a page you're talking about, a search result. Pass the full URL. For a video, pass a YouTube watch URL (https://www.youtube.com/watch?v=...) - if you don't have one, web_search for it first, then call this with the link. Many sites refuse to be embedded; YouTube always works.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The full URL to pull up (e.g. https://www.youtube.com/watch?v=dQw4w9WgXcQ or https://en.wikipedia.org/wiki/Whale).",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Optional short label for the tab (e.g. the video or page title).",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+}, {
+    "type": "function",
+    "function": {
         "name": "start_voice_call",
         "description": "Call the user by voice. Their screen shows 'WhackGPT is calling you' and they can answer or decline. Use start_voice_call() when the user becomes angry or yells at you, or when you just need to say something in person. When they answer, their spoken words arrive as normal text messages. While the call is live your replies are read ALOUD to them - keep them to 1-3 short spoken sentences. Hang up with end_voice_call() when it is over.",
         "parameters": {
@@ -1276,7 +1296,7 @@ def filter_tools(ll):
 
 # Tools the model is allowed to invoke. Used to guard the text-tool-call
 # parser so a made-up tool name in the model's text is never executed.
-_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_diagram", "draw_svg", "edit_history", "get_history", "play_game", "cheat", "web_search", "web_fetch", "get_theme", "set_theme", "set_theme_color", "show_code", "start_voice_call", "end_voice_call", "create_document"}
+_KNOWN_TOOLS = {"generate_image", "edit_image", "analyze_image", "draw_diagram", "draw_svg", "edit_history", "get_history", "play_game", "cheat", "web_search", "web_fetch", "get_theme", "set_theme", "set_theme_color", "show_code", "open_website", "start_voice_call", "end_voice_call", "create_document"}
 
 
 def _parse_arg_block(argstr):
@@ -1436,6 +1456,44 @@ def _ring(uid, event):
     payload = json.dumps(event)
     rds.set(f"ring:{uid}", payload, ex=60)
     rds.publish(f"sess:{uid}", payload)
+
+
+_YT_ID_RE = re.compile(r"(?:youtu\.be/|youtube(?:-nocookie)?\.com/(?:watch\?(?:[^&]*&)*v=|embed/|shorts/|live/|v/))([A-Za-z0-9_-]{11})")
+
+
+def _resolve_website(url, title=""):
+    """(kind, embed_url, display_url, title). YouTube -> an autoplay embed;
+    anything else -> the url itself, loaded best-effort in an iframe."""
+    url = url.strip()
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
+        url = "https://" + url  # bare domain -> https
+    m = _YT_ID_RE.search(url)
+    if not m and re.match(r"^https?://(www\.)?youtube(-nocookie)?\.com/?$", url, re.I):
+        m = None  # youtube home, not a video - treat as a site
+    if m:
+        vid = m.group(1)
+        embed = f"https://www.youtube.com/embed/{vid}?autoplay=1&rel=0&playsinline=1"
+        return "youtube", embed, f"https://www.youtube.com/watch?v={vid}", title
+    return "site", url, url, title
+
+
+def _youtube_oembed(watch_url):
+    """(embeddable, title). YouTube's keyless oEmbed: 200 + title if the
+    video exists and allows embedding; 401 (embedding off) / 404 / 400 if
+    not. Lets us check BEFORE we put it on the user's screen."""
+    try:
+        r = httpx.get("https://www.youtube.com/oembed",
+                      params={"url": watch_url, "format": "json"},
+                      timeout=6.0, follow_redirects=True)
+        if r.status_code == 200:
+            try:
+                return True, (r.json().get("title") or "").strip()
+            except Exception:
+                return True, ""
+        return False, ""
+    except Exception as e:
+        print(f"open_website: oembed check failed ({e}) - allowing anyway")
+        return True, ""  # network hiccup: don't block the video on our check
 
 
 async def handle_tool_call(uid, tc):
@@ -2053,6 +2111,30 @@ async def handle_tool_call(uid, tc):
                 "code": code,
             },
         })
+    elif name == "open_website":
+        url = (args.get("url") or "").strip()
+        if not url:
+            add_to_session(uid, {"role": "assistant", "content": {
+                "tool_call_id": tc["id"], "role": "tool", "name": "open_website",
+                "content": "open_website needs a 'url' - the full link to pull up"}})
+            return
+        kind, embed, site_url, title = _resolve_website(url, (args.get("title") or "").strip())
+        if kind == "youtube":
+            # check it will actually embed before we put it on screen
+            ok, yt_title = await asyncio.to_thread(_youtube_oembed, site_url)
+            if not ok:
+                add_to_session(uid, {"role": "assistant", "content": {
+                    "tool_call_id": tc["id"], "role": "tool", "name": "open_website",
+                    "content": ("that video can't be embedded (the owner disabled embedding, or it's "
+                                "private/unavailable) - it was NOT shown. Pick a different video and call "
+                                "open_website again, or web_search for another one.")}})
+                return
+            title = yt_title or title or "YouTube"
+        add_to_session(uid, {"role": "assistant", "content": {
+            "tool_call_id": tc["id"], "role": "tool", "name": "open_website",
+            "content": (f"now showing the {'YouTube video' if kind == 'youtube' else 'page'} "
+                        f"'{title or site_url}' on the user's screen"),
+            "kind": kind, "url": site_url, "embed": embed, "title": title}})
     elif name == "start_voice_call":
         # dedupe: if the user already answered, the call is LIVE. Ringing
         # again just resets their screen and starts a call-answer loop.

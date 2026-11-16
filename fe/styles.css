@@ -2205,3 +2205,40 @@ textarea {
 .share-sep {
   opacity: 0.5;
 }
+
+/* open_website: a site / YouTube video embedded in the chat */
+.site-card {
+  width: min(100%, 560px);
+  margin: 0.4rem 0;
+  border: 1px solid var(--border-color);
+  border-radius: 0.6rem;
+  overflow: hidden;
+  background: #1e1e2a;
+}
+.sc-bar {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: #2a2a38; color: #c9cdd6; font-size: 0.8rem;
+}
+.sc-bar .fa-lock { font-size: 0.7rem; opacity: 0.7; }
+.sc-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-open { color: #c9cdd6; opacity: 0.8; text-decoration: none; }
+.sc-open:hover { opacity: 1; }
+.sc-view { background: #000; }
+.site-card-yt .sc-view { aspect-ratio: 16 / 9; }
+.sc-frame { width: 100%; height: 100%; border: 0; display: block; }
+.site-card:not(.site-card-yt) .sc-frame { height: 420px; background: #fff; }
+
+/* YouTube player (makeYouTube) - the iframe fills it, a volume bar overlays */
+.yt-embed { position: relative; width: 100%; height: 100%; background: #000; overflow: hidden; }
+.site-card-yt .sc-view .yt-embed { position: absolute; inset: 0; }
+.yt-embed iframe, .yt-embed .yt-host { width: 100%; height: 100%; border: 0; display: block; }
+.yt-vol {
+  position: absolute; left: 8px; bottom: 8px; z-index: 2;
+  display: flex; align-items: center; gap: 0.45rem;
+  padding: 0.3rem 0.55rem 0.3rem 0.4rem;
+  background: rgba(0, 0, 0, 0.62); border-radius: 999px; backdrop-filter: blur(2px);
+  /* always visible - a phone has no hover, and the point is reaching volume */
+}
+.yt-mute { background: none; border: 0; color: #fff; cursor: pointer; font-size: 0.9rem; padding: 0.1rem 0.25rem; line-height: 1; min-width: 1.1rem; }
+.yt-vol-slider { width: 90px; accent-color: #ff2b2b; height: 3px; cursor: pointer; }
