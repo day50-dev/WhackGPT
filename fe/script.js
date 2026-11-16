@@ -1204,7 +1204,7 @@ function isCallEvent(t) {
 // that ends mid-song pauses it, and the next wait RESUMES the same song where
 // it left off; a song that plays to its end moves on to the next one. One reused <audio> element, so mobile autoplay rules
 // unlocked by the first tap keep applying.
-var HOLD_TRACKS = 43, HOLD_VOLUME = 0.4, HOLD_FADE_MS = 400;
+var HOLD_TRACKS = 49, HOLD_VOLUME = 0.4, HOLD_FADE_MS = 400;
 var _hold = null, _holdOn = false, _holdLast = 0, _holdFade = null;
 
 function _holdNext() {
@@ -1407,6 +1407,7 @@ function callSend(text) {
 // could be spoken.
 function speakAloud(text, onEnd) {
   return speakServer(text, onEnd, 'whackgpt').catch((e) => {
+    if (e && e.hungUp) throw e; // hung up - don't start a browser voice
     console.log("[speech] tts host failed, using a browser voice", e);
     return speakBrowser(text, onEnd);
   });
@@ -1434,8 +1435,8 @@ function speakServer(text, onEnd, voice) {
   })
     .then((res) => res.blob())
     .then((blob) => {
+      if (epoch !== _voiceEpoch) { const e = new Error('hung up'); e.hungUp = true; throw e; }
       if (!blob || blob.size === 0) throw new Error('empty audio');
-      if (epoch !== _voiceEpoch) throw new Error('hung up');
       const audio = new Audio(URL.createObjectURL(blob));
       _voices.add(audio);
       let finished = false;
@@ -1443,6 +1444,13 @@ function speakServer(text, onEnd, voice) {
       audio.onended = end;
       audio.onerror = end;
       return audio.play().then(() => audio);
+    })
+    .catch((e) => {
+      // a hang-up at ANY point in here (fetch, empty audio, decode) must not
+      // fall through to the browser-voice fallback - re-tag it so callers skip
+      if (e && e.hungUp) throw e;
+      if (epoch !== _voiceEpoch) { const h = new Error('hung up'); h.hungUp = true; throw h; }
+      throw e;
     });
 }
 
@@ -1492,6 +1500,7 @@ function _harrietVoice(voices) {
 function speakHarriet(text, onEnd) {
   // her TTS voice (af_river); her browser voice only if the host is down
   return speakServer(text, onEnd, 'harriet').catch((e) => {
+    if (e && e.hungUp) throw e; // hung up - don't start a browser voice
     console.log("[speech] tts host failed for Harriet, using a browser voice", e);
     return speakBrowser(text, onEnd, { pick: _harrietVoice, pitch: 0.7, rate: 1.35 });
   });
@@ -1500,7 +1509,11 @@ function speakHarriet(text, onEnd) {
 function speakBrowser(text, onEnd, fixed) {
   const say = _speechText(text);
   if (!say) return Promise.reject(new Error("nothing to say"));
+  // the call was hung up (the server TTS was still in flight and rejected
+  // into a fallback catch): do NOT start a browser voice over a dead call
+  const epoch = _voiceEpoch;
   return _speechVoices().then((voices) => {
+    if (epoch !== _voiceEpoch) throw new Error("hung up");
     if (fixed) return _speakWith(say, onEnd, fixed.pick(voices), fixed.pitch, fixed.rate);
     // English voices only - every variant (US, GB, AU, IE, IN, ZA...). Other
     // languages map the Latin alphabet to their own sounds and come out as
@@ -1751,7 +1764,7 @@ function callToggleMute() {
 // over a user mid-sentence), her words go into the chat as her message,
 // WhackGPT gets ONE reply - which she does not review - and then it is the
 // user's turn again. So they never go back and forth on their own.
-var HARRIET_ODDS = 0.75; // chance she's on a call - decided when it rings
+var HARRIET_ODDS = 0.95; // chance she's on a call - decided when it rings
 // her name is Carol (Harriet was too hard for dictation) - loose on spelling
 var HARRIET_NAME = /\b([ck][ae]rr?oll?e?|[ck]arl|humbug)\b/i; // + Carl / Karl (dictation)
 function harrietReview(text) {
@@ -2151,7 +2164,7 @@ function daddySpeak(call, text, then) {
     then();
   };
   speakServer(text, after, 'daddy')
-    .catch(() => speakBrowser(text, after, { pick: (vs) => vs.find((x) => /^en/i.test(x.lang || '')) || null, pitch: 0.6, rate: 1.0 }))
+    .catch((e) => { if (e && e.hungUp) throw e; return speakBrowser(text, after, { pick: (vs) => vs.find((x) => /^en/i.test(x.lang || '')) || null, pitch: 0.6, rate: 1.0 }); })
     .then(() => { if (_call === call && call.phase === 'daddy') holdStop(); })
     .catch((e) => { console.log('[daddy] voice failed', e); after(); });
 }
@@ -2183,7 +2196,7 @@ function harutoSpeak(text, then) {
     then();
   };
   speakServer(text, after, 'haruto')
-    .catch(() => speakBrowser(text, after))
+    .catch((e) => { if (e && e.hungUp) throw e; return speakBrowser(text, after); })
     .then(() => { if (_call === call && call.phase === 'haruto') holdStop(); })
     .catch((e) => { console.log('[haruto] voice failed', e); after(); });
 }
