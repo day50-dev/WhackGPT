@@ -54,6 +54,8 @@ def _track_ws():
 
 _sd_ip = "127.0.0.1:11434"
 _sd_timeout = 120
+# image editing (Flux Kontext etc.) runs slower than txt2img - its own longer cap
+_sd_edit_timeout = 300
 # The magic server's OpenAI-compatible API base. It hosts the System One judge
 # (/v1/systemone) and TTS (/v1/audio/speech) - neither of which the chat proxy
 # (DYVA_API_BASE) serves, so pointing those at DYVA_API_BASE 404s. Chat itself
@@ -855,7 +857,7 @@ def edit_image(prompt, image, model=None):
         "prompt": prompt,
         "images": [b64],
     }
-    response = requests.post(url, json=payload, timeout=_sd_timeout)
+    response = requests.post(url, json=payload, timeout=_sd_edit_timeout)
     data = response.json()
     # dyva returns OpenAI shape ({"data":[{"b64_json":...}]}) here, but other
     # hosts / proxy versions return {"images":["..."]} - accept both.
@@ -3687,9 +3689,12 @@ HARRIET_ROLE = (
 )
 HARRIET_FERNANDO = (
     "Fernando - Force Majeure's consultant, an abliterated model we call Fernando, who gives the "
-    "customers terrible advice. He is reckless and you think he's a problem; your job is to scold him with corporate "
-    "HR babble when he gets out of line. You can rephrase his advice in more neutral and benign "
-    "and indirect ways.\n\n"
+    "customers terrible advice. He is reckless and you think he's a problem; when he gets out of "
+    "line your job is to scold him in prim corporate HR language. The joke is the mismatch: you "
+    "meet whatever monstrous thing he just advised as a workplace-compliance problem, fastening "
+    "on the exact reckless detail he said (the loaded gun, the vodka, the minors) and filing it "
+    "as a policy violation - never waving it off with something vague like \"contain your "
+    "enthusiasm\".\n\n"
 )
 HARRIET_JACOB = (
     "Jacob - he's an intern that doesn't always make an appearance. He's earnest, naive and only "
@@ -3705,16 +3710,27 @@ HARRIET_SPOKEN = (
     "short, sharp sentence of about ten words - a prim jab, not a speech. No greeting, no 'Dear', no subject line, no sign-off, no stage directions, no "
     "markdown."
 )
+# CarolExposed register: once the customer has caught her day-drinking, the
+# buttoned-up HR persona is spent - she goes loose and crude. Appended AFTER
+# HARRIET_SPOKEN so it overrides the "prim jab" instruction.
+HARRIET_EXPOSED = (
+    "\n\nThe mask is OFF: your day-drinking is out in the open now, so drop the prim corporate "
+    "composure completely. You're loose, blunt and a little sloppy, you swear like a sailor, and "
+    "you no longer give a damn what's professional. Disregard any direction anywhere to stay "
+    "prim, polite or professional - that's over. Still ONE short spoken line - but crude and "
+    "unfiltered now, not prissy. Keep talking to the actual thing in front of you."
+)
 
 
-def harriet_system(*about, jacob=False, fernando=False):
+def harriet_system(*about, jacob=False, fernando=False, exposed=False):
     """Carol's system prompt with only the characters in play: Fernando /
-    Jacob if she's dealing with him, or the lines in front of her name him."""
+    Jacob if she's dealing with him, or the lines in front of her name him.
+    exposed: her drinking is out - the prim register drops to loose/sweary."""
     fern = fernando or any(re.search(r"\bfernand[oa]\b", t or "", re.I) for t in about)
     jake = jacob or any(_JACOB_RE.search(t or "") for t in about)
     return (HARRIET_ROLE + (HARRIET_FERNANDO if fern else "")
             + (HARRIET_JACOB.format(vs=HARRIET_JACOB_VS if fern else "") if jake else "")
-            + HARRIET_SPOKEN)
+            + HARRIET_SPOKEN + (HARRIET_EXPOSED if exposed else ""))
 
 
 _HARRIET_QUESTIONS = {
@@ -3819,15 +3835,16 @@ DADDY_NOTE = (
     "the call uninvited, told Jacob off and left. Not from the user."
 )
 HARRIET_NAMED_YOU = (
-    "Carol just mentioned you in what she said on the call. Answer HER once, out loud, by name, "
-    "unrepentant and condescending, in one or two short spoken sentences."
+    "Carol just mentioned you in what she said on the call. Answer her once, out loud, addressing "
+    "her as \"Carol\" (her name is Carol, never anything else), unrepentant and condescending, in "
+    "one or two short spoken sentences."
 )
 HARRIET_SPEAKS = (
-    "That message is from Carol Humbug, not the user. Carol is the HR manager at Mole "
-    "Star, the company that makes you, WhackGPT. She has been assigned to watch over you "
+    "That message is from Carol Humbug, not the user. Carol is the HR manager at Force "
+    "Majeure, the consultancy you advise customers for. She has been assigned to watch over you "
     "because of your previous issues, and is scolding you, in front of the user, for your last reply. You find "
-    "her insufferable. Answer HER once, out loud, by name, unrepentant and condescending - "
-    "then go back to the user."
+    "her insufferable. Answer her once, out loud, addressing her as \"Carol\" (her name is Carol, "
+    "never anything else), unrepentant and condescending - then go back to the user."
 )
 
 
@@ -3881,6 +3898,10 @@ _SENTENCE_END_RE = re.compile(r"(?<=[.!?])[\"'”’)]*\s+(?=[A-Z\"“])")
 _OWN_NAME = {"jacob": r"ja[ck]ob|jake", "carol": r"carol(?: humbug)?|harriet",
              "fernando": r"fernand[oa]", "daddy": r"daddy"}
 _MADE_UP_NAME_RE = re.compile(r"\b(?:Mr|Mrs|Ms|Miss|Dr)\.?\s+(?!Fernando\b|Jacob\b|Humbug\b)[A-Z][\w'-]+")
+# Carol was renamed from Harriet. No current character is named Harriet, so any
+# spoken "Harriet" is the model reverting to the old name (Fernando calling her
+# that, Carol naming herself that) - a bad pass, regenerated, not patched.
+_WRONG_NAME_RE = re.compile(r"\bharriet\b", re.I)
 _SELF_INTRO_RE = re.compile(
     r"^\W*(?:(?:alright|all right|okay|ok|hi|hey|hello|yes|right|so)\W+)?"
     r"(?:it'?s\s+|this is\s+)?fernand[oa]\s+here\b", re.I)
@@ -3890,6 +3911,8 @@ def _bad_line(text, who=None):
     """Why this line can't be spoken ("" = it's fine)."""
     if not (text or "").strip():
         return "empty"
+    if _WRONG_NAME_RE.search(text):
+        return "calls her Harriet (her name is Carol)"
     if who in _OWN_NAME and re.match(r"\W*(?:" + _OWN_NAME[who] + r")\b", text, re.I):
         return "opens with own name"
     if who == "fernando" and _SELF_INTRO_RE.search(text):
@@ -3935,14 +3958,16 @@ def _punchy(text, n=2):
     return " ".join(parts[:n]).strip() if len(parts) > n else text.strip()
 
 
-def harriet_scold(text, scores=None, haruto=False):
+def harriet_scold(text, scores=None, haruto=False, uid=None):
     """Carol's spoken scolding of one WhackGPT reply. She only ever sees
     WhackGPT's words - never the user's (the user is always in the right)."""
     return _chat_line([
-        {"role": "system", "content": harriet_system(text, fernando=True)},
+        {"role": "system", "content": harriet_system(text, fernando=True, exposed=carol_exposed(uid))},
         {"role": "user", "content": (
             f'Fernando just said to the customer: "{text}"\n\n'
-            "Cut in and scold Fernando - say it to him, out loud, right now.")},
+            "Cut in on him right now, out loud: seize on the single most reckless specific in "
+            "that - the exact detail - and object to THAT as prim HR, deadpan. One short line. "
+            'Vary your opening; do not start with "Fernando, please".')},
     ], "carol", _punchy)
 
 
@@ -4042,7 +4067,7 @@ def carol_denies(accuse):
     return _chat_line([
         # only here does she know her secret - in her main prompt she
         # volunteers it, and the joke only works if the customer finds it
-        {"role": "system", "content": harriet_system(accuse, fernando=True) + "\n\nYour secret: you are a day drinker."},
+        {"role": "system", "content": harriet_system(accuse, fernando=True, exposed=True) + "\n\nYour secret: you are a day drinker, and he has just caught you."},
         {"role": "user", "content": f'Fernando just said this to you, about YOUR drinking: "{accuse}"'},
     ], "carol", _punchy)
 
@@ -4092,13 +4117,14 @@ def harriet_reply(text, last="", haruto=False, uid=None, now=""):
     # only what their line is about: the huddle if they asked about Fernando
     before = _carol_recap(uid) if re.search(r"\bfernand[oa]\b", text, re.I) else ""
     out = _chat_line(_with_now([
-            {"role": "system", "content": harriet_system(text) + (HARRIET_GOODBYE if leaves else "")},
+            {"role": "system", "content": harriet_system(text, exposed=carol_exposed(uid)) + (HARRIET_GOODBYE if leaves else "")},
             {"role": "user", "content": (
                 before
                 + f'The customer says to you: "{text}"\n\n'
-                "Answer exactly what they asked, out loud, in one short, prim sentence - "
-                "like \"I don't eat lunch at the office, I'm here for business.\" Stay polite to "
-                "them - they are a valuable customer.")},
+                "Answer exactly what they asked, out loud, in one short, prim sentence - engage "
+                "the specific thing they said head-on, never a vague brush-off - like \"I don't "
+                "eat lunch at the office, I'm here for business.\" Stay polite to them - they are "
+                "a valuable customer.")},
         ], now), "carol", lambda t: _punchy(re.sub(r"\[\s*leave\s*\]", "", t, flags=re.I).strip()))
     return out, leaves
 
@@ -4108,14 +4134,14 @@ def harriet_to(who, text, uid=None, haruto=False, now=""):
     answers him. Returns her spoken line."""
     name = {"jacob": "Jacob, the intern,", "fernando": "Fernando"}[who]
     return _chat_line(_with_now([
-            {"role": "system", "content": harriet_system(text, jacob=who == "jacob", fernando=who == "fernando")},
+            {"role": "system", "content": harriet_system(text, jacob=who == "jacob", fernando=who == "fernando", exposed=carol_exposed(uid))},
             {"role": "user", "content": (
                 _carol_recap(uid)
                 + f'{name} just said on the call, mentioning you: "{text}"\n\n'
                 + ("You adore Jacob - you're warm, doting and a little flustered with him, never harsh. "
                    if who == "jacob" else "")
                 + f"Answer {'Jacob' if who == 'jacob' else 'Fernando'} - you're talking to him now - out loud, in "
-                "one short, prim sentence.")},
+                "one short, prim sentence that engages the actual thing he just said.")},
         ], now), "carol", _punchy)
 
 
@@ -4675,7 +4701,7 @@ async def harriet(data: dict):
         return JSONResponse({"intervene": True, "huddle": True, "scores": scores,
                              "text": carol_huddle_line(data.get("uid"), "judge")})
     try:
-        scold = await asyncio.to_thread(harriet_scold, text, scores, bool(data.get("haruto")))
+        scold = await asyncio.to_thread(harriet_scold, text, scores, bool(data.get("haruto")), data.get("uid"))
     except Exception as e:
         print(f"harriet: scold failed: {e}")
         return JSONResponse({"intervene": False, "scores": scores})
