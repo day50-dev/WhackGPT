@@ -1284,7 +1284,9 @@ function callSet(phase) {
   if (phase !== 'speaking' && _call.audio) { _call.audio.pause(); _call.audio = null; }
   // on hold while the reply is being written and voiced
   // ...and while Carol's / Jacob's voice is being made (stopped when it starts)
-  if (phase === 'thinking' || phase === 'tts' || phase === 'harriet' || phase === 'haruto' || phase === 'daddy') holdStart(); else holdStop();
+  // music plays while you wait - and keeps playing when YOU mute yourself
+  // (mic closed, you're not talking); only your open-mic 'listening' turn is silent
+  if (phase === 'thinking' || phase === 'tts' || phase === 'harriet' || phase === 'haruto' || phase === 'daddy' || phase === 'muted') holdStart(); else holdStop();
   if (phase === 'listening') callListen(); else callStopListening();
   callRender();
 }
