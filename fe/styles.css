@@ -1494,25 +1494,32 @@ textarea {
   user-select: none;
   font-size: 0.85rem;
   color: var(--text-secondary);
-  transition: background 0.2s;
+  transition: background 0.2s, border-color 0.2s;
 }
 
 .thinking-bar:hover {
   background: var(--pill-hover);
 }
 
-/* generation finished: the bar's background fades out (transition on .thinking-bar) */
+/* generation finished: the bar's background and border fade out (transitions
+   on .thinking-bar) so the collapsed pill reads as a plain label */
 .thinking-bar.done {
   background: transparent;
+  border-color: transparent;
 }
 
 .thinking-bar.done:hover {
   background: var(--pill-hover);
 }
 
-/* expanded: the bar meets the content below, so its bottom corners go square */
+/* expanded: the bar meets the content box below, so its bottom corners go
+   square and its border comes back to close the top of the panel */
 .thinking-bar.expanded {
   border-radius: 8px 8px 0 0;
+}
+
+.thinking-bar.done.expanded {
+  border-color: var(--border-color);
 }
 
 .thinking-label {
@@ -2249,7 +2256,7 @@ textarea {
    inside (.yt-embed inset:0). */
 .site-card-yt .sc-view { height: 0; padding-bottom: 56.25%; }
 .sc-frame { width: 100%; height: 100%; border: 0; display: block; }
-.site-card:not(.site-card-yt) .sc-frame { height: 420px; background: #fff; }
+.site-card:not(.site-card-yt) .sc-frame { height: 70vh; background: #fff; }
 
 /* YouTube player (makeYouTube) - the iframe fills it, a volume bar overlays */
 .yt-embed { position: relative; width: 100%; height: 100%; background: #000; overflow: hidden; }

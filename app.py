@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import xml.etree.ElementTree as ET
 import uuid, os, redis, json, html
+import ipaddress, socket
 import base64, requests, re
 import asyncio
 import random
@@ -16,7 +17,7 @@ import numpy as np
 import httpx
 import games
 from redis.asyncio import Redis as ioredis
-from fastapi import FastAPI, WebSocket, UploadFile, File
+from fastapi import FastAPI, WebSocket, UploadFile, File, Request
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -1476,7 +1477,92 @@ def _resolve_website(url, title=""):
         vid = m.group(1)
         embed = f"https://www.youtube.com/embed/{vid}?autoplay=1&rel=0&playsinline=1"
         return "youtube", embed, f"https://www.youtube.com/watch?v={vid}", title
-    return "site", url, url, title
+    # Non-YouTube pages set X-Frame-Options and won't load in an iframe. We
+    # serve them through our own /proxy/ (re-fetched from our origin, no XFO);
+    # the real url stays as the display url (address bar + "open in new tab").
+    proxy = "/proxy/" + re.sub(r"^https?://", "", url)
+    return "site", proxy, url, title
+
+
+# --- /proxy: re-serve a page from our origin so it can be framed -------------
+# X-Frame-Options only blocks FRAMING the document, not loading its images /
+# css / js cross-origin. So we proxy ONLY the top HTML, inject a <base href>,
+# and the browser pulls every sub-resource straight from the real site. This
+# is a display gag (links inside navigate to the real site and hit XFO again),
+# not a real proxy service.
+_PROXY_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+
+
+def _proxy_host_ok(host):
+    """Keep our public box from being used as an SSRF pivot: refuse hosts that
+    resolve to private / loopback / link-local / reserved addresses (cloud
+    metadata, localhost, the LAN). Not security theater - just the one guard
+    that matters for an open server-side fetcher."""
+    if not host:
+        return False
+    h = host.lower().rstrip(".")
+    if h == "localhost" or h.endswith(".localhost") or h.endswith(".internal") or h.endswith(".local"):
+        return False
+    try:
+        infos = socket.getaddrinfo(h, None)
+    except Exception:
+        return False
+    for info in infos:
+        try:
+            addr = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return False
+    return True
+
+
+@app.get("/proxy/{path:path}")
+async def proxy_site(path: str, request: Request):
+    target = path.strip()
+    if not target:
+        return Response("no url", status_code=400)
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", target):
+        target = "https://" + target
+    if request.url.query:  # {path:path} drops the query string - carry it through
+        target += ("&" if "?" in target else "?") + request.url.query
+    try:
+        u = httpx.URL(target)
+    except Exception:
+        return Response("bad url", status_code=400)
+    if u.scheme not in ("http", "https"):
+        return Response("unsupported scheme", status_code=400)
+    if not _proxy_host_ok(u.host):
+        return Response("blocked host", status_code=403)
+    try:
+        async with httpx.AsyncClient(
+                follow_redirects=True, timeout=15.0,
+                headers={"User-Agent": _PROXY_UA,
+                         "Accept": "text/html,application/xhtml+xml,*/*"}) as client:
+            r = await client.get(target)
+    except Exception as e:
+        return Response(f"could not load that page ({e})", status_code=502)
+    ctype = r.headers.get("content-type", "") or "application/octet-stream"
+    if "html" not in ctype.lower():
+        # not a document (a redirect to an image, etc.) - stream it straight
+        return Response(content=r.content, status_code=r.status_code, media_type=ctype)
+    body = r.text
+    # drop any page-set CSP / XFO meta so nothing re-imposes framing/base limits
+    body = re.sub(
+        r"<meta[^>]+http-equiv=['\"]?(?:content-security-policy|x-frame-options)['\"]?[^>]*>",
+        "", body, flags=re.I)
+    # <base href=final url> so relative AND root-relative links resolve to the
+    # real origin; inject it as the first thing in <head>
+    base_tag = f'<base href="{html.escape(str(r.url), quote=True)}">'
+    if re.search(r"<head[^>]*>", body, re.I):
+        body = re.sub(r"(<head[^>]*>)", lambda m: m.group(1) + base_tag, body, count=1, flags=re.I)
+    else:
+        body = base_tag + body
+    # our Response carries no X-Frame-Options, so it frames fine
+    return Response(content=body, status_code=r.status_code,
+                    media_type="text/html; charset=utf-8")
 
 
 def _youtube_oembed(watch_url):
