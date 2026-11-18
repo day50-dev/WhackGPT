@@ -407,7 +407,10 @@
 .ho.huddle:not(.presenting) .ho-ai > .ho-name { top: 10px; bottom: auto; left: auto; right: 12px; }
 
 /* the forgotten browser tab Fernando's screen share opens on */
-.ho-present-body:has(.ho-browser) { padding: 0; align-items: center; justify-content: stretch; }
+/* align-items:stretch (like .wp-doc) so the browser FILLS the presenting area's
+   height; with align-items:center it collapsed to content height and the live
+   iframe (height:100%) rendered tiny */
+.ho-present-body:has(.ho-browser) { padding: 0; align-items: stretch; justify-content: center; }
 .ho-browser { flex: 1 1 auto; width: 100%; display: flex; flex-direction: column; background: #dee1e6; min-width: 0; }
 .ho-br-tabs { display: flex; align-items: flex-end; gap: 8px; padding: 6px 8px 0; color: #5f6368; font-size: 11px; }
 .ho-br-tab {
