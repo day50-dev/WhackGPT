@@ -945,8 +945,7 @@ function makeThinkingBlock(reasoning) {
   const thinkingEl = document.createElement("div");
   thinkingEl.classList.add("thinking-block");
   thinkingEl.innerHTML = `
-    <div class="thinking-bar">
-      <i class="fas fa-brain"></i>
+    <div class="thinking-bar done">
       <span class="thinking-label">Thinking</span>
       <span class="thinking-tokens">${Math.max(1, Math.round((reasoning || '').length / 4))} tokens</span>
       <i class="fas fa-chevron-down toggle-icon"></i>
@@ -2570,7 +2569,6 @@ async function sendMessage(regenText, isRegen, isEdit, originalText, opts) {
   thinkingEl.classList.add("thinking-block");
   thinkingEl.innerHTML = `
     <div class="thinking-bar">
-      <i class="fas fa-brain"></i>
       <span class="thinking-label">Thinking</span>
       <span class="thinking-tokens">0 tokens</span>
       <i class="fas fa-chevron-down toggle-icon"></i>
@@ -2783,6 +2781,9 @@ async function sendMessage(regenText, isRegen, isEdit, originalText, opts) {
     callReply(partialContent); // no-op unless a call is waiting on this reply
     if (!hasThinking) {
       thinkingEl.remove();
+    } else {
+      // generation done: the bar fades its background to transparent
+      thinkingBarEl.classList.add('done');
     }
     // If the text was cleared (e.g. a game move recovered from the model's
     // raw tool-call text), the placeholder bubble is empty - remove it so only

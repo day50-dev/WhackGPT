@@ -1405,6 +1405,10 @@ textarea {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  /* the base .speak-btn adds margin-top/align-self for its standalone (block)
+     use; in the row it must sit flush so its icon lines up with the "more" chip */
+  margin-top: 0;
+  align-self: center;
   padding: 4px 12px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
@@ -1497,9 +1501,18 @@ textarea {
   background: var(--pill-hover);
 }
 
-.thinking-bar .fa-brain {
-  color: var(--primary);
-  font-size: 0.9rem;
+/* generation finished: the bar's background fades out (transition on .thinking-bar) */
+.thinking-bar.done {
+  background: transparent;
+}
+
+.thinking-bar.done:hover {
+  background: var(--pill-hover);
+}
+
+/* expanded: the bar meets the content below, so its bottom corners go square */
+.thinking-bar.expanded {
+  border-radius: 8px 8px 0 0;
 }
 
 .thinking-label {
