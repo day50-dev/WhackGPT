@@ -3072,6 +3072,18 @@ async def chat(data: dict):
                 # with the ring and is sent as the user's first spoken line
                 # the moment they pick up.
                 topic = " ".join(parts[1:]).strip()
+                if isFirst:
+                    # A call as the very first action takes no model turn, so
+                    # none of the title/ownership setup below runs and the chat
+                    # would never appear in the sidebar. Do it now, same as a
+                    # typed first message does: the topic is the title, or a
+                    # plain default when they just hit the phone.
+                    if data.get("user"):
+                        rds.set(f"owner:{uid}", data["user"])
+                    prov = re.sub(r"\s+", " ", topic or "Voice call").strip()[:40]
+                    rds.hset(_topicList, uid, prov)
+                    rds.publish(_topicList, json.dumps({uid: prov}))
+                    touch(uid)
                 _ring(uid, {"type": "voice_call", "state": "incoming", "direction": "out", "topic": topic})
                 return JSONResponse({"res": True, "data": [], "uid": uid})
             else:
