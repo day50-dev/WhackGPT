@@ -152,6 +152,7 @@ var Hangout = (function () {
       '<div class="ho-top">' +
         '<span class="ho-title">WhackGPT</span>' +
         '<span class="ho-dot">·</span><span class="ho-timer">00:00</span>' +
+        '<button class="ho-tips-btn" title="Things to try"><i class="fas fa-lightbulb"></i> things to try</button>' +
         '<span class="ho-rec"><i class="fas fa-circle"></i> REC</span>' +
       '</div>' +
       '<div class="ho-stage">' +
@@ -169,7 +170,7 @@ var Hangout = (function () {
         '</div>' +
         '<div class="ho-tile ho-haruto">' +
           '<img class="ho-face" src="intern.avif" alt="Jacob">' +
-          '<div class="ho-name">Jacob · intern <i class="fas fa-microphone-slash ho-mic"></i></div>' +
+          '<div class="ho-name">Jacob · he/him <i class="fas fa-microphone-slash ho-mic"></i></div>' +
         '</div>' +
         '<div class="ho-tile ho-daddy">' +
           '<img class="ho-face" src="daddy.avif" alt="Daddy">' +
@@ -197,6 +198,7 @@ var Hangout = (function () {
     document.body.appendChild(root);
     root.querySelector(".ho-mute").addEventListener("click", () => callToggleMute());
     root.querySelector(".ho-hang").addEventListener("click", () => callEnd("you hung up"));
+    root.querySelector(".ho-tips-btn").addEventListener("click", () => window.openCheatSheet && window.openCheatSheet());
   }
 
   function tick() {
@@ -256,7 +258,7 @@ var Hangout = (function () {
       if (root.dataset.intern !== String(intern)) {
         root.dataset.intern = String(intern);
         root.querySelector(".ho-ai .ho-face").src = intern ? "intern.avif" : "whack-face.avif";
-        root.querySelector(".ho-ai-name").textContent = intern ? "Jacob · intern" : "Fernando";
+        root.querySelector(".ho-ai-name").textContent = intern ? "Jacob · he/him" : "Fernando";
       }
       root.classList.toggle("ai-speaking", p === "speaking" || (p === "haruto" && intern));
       // summoned: the quiet intern unmutes for one line from his own tile

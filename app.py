@@ -1545,9 +1545,32 @@ async def proxy_site(path: str, request: Request):
     except Exception as e:
         return Response(f"could not load that page ({e})", status_code=502)
     ctype = r.headers.get("content-type", "") or "application/octet-stream"
-    if "html" not in ctype.lower():
-        # not a document (a redirect to an image, etc.) - stream it straight
-        return Response(content=r.content, status_code=r.status_code, media_type=ctype)
+    cl = ctype.lower()
+    if "html" not in cl:
+        if cl.startswith("image/"):
+            # a real image renders fine even sandboxed - just stream it
+            return Response(content=r.content, status_code=r.status_code, media_type=ctype)
+        # a PDF / binary won't render in a sandboxed iframe (broken-doc icon).
+        # It's a joke product - we just want SOMETHING on the screen, so serve a
+        # tidy "document" placeholder (HTML from our origin, always frames).
+        host = ""
+        try:
+            host = httpx.URL(str(r.url)).host or ""
+        except Exception:
+            pass
+        label = "PDF document" if "pdf" in cl else "Document"
+        ph = (
+            "<!doctype html><html><head><meta charset='utf-8'><style>"
+            "html,body{margin:0;height:100%}"
+            "body{display:flex;align-items:center;justify-content:center;background:#f1f3f4;"
+            "font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#3c4043}"
+            ".d{text-align:center;padding:40px}.d .pg{font-size:76px;line-height:1}"
+            ".d h1{font-size:18px;margin:16px 0 4px;font-weight:600}"
+            ".d p{margin:0;font-size:13px;color:#5f6368;word-break:break-all}"
+            "</style></head><body><div class='d'><div class='pg'>\U0001F4C4</div>"
+            f"<h1>{html.escape(label)}</h1><p>{html.escape(host)}</p></div></body></html>"
+        )
+        return Response(content=ph, media_type="text/html; charset=utf-8")
     body = r.text
     # drop any page-set CSP / XFO meta so nothing re-imposes framing/base limits
     body = re.sub(

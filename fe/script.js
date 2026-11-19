@@ -254,7 +254,24 @@ const contacts = {
   },
 };
 
+// "things to try" lightbox, opened from the call (window.openCheatSheet,
+// since hangout.js is a separate file).
+const cheat = {
+  lb() { return document.getElementById("cheatSheet"); },
+  open() { const lb = this.lb(); if (lb) lb.removeAttribute("hidden"); },
+  close() { const lb = this.lb(); if (lb) lb.setAttribute("hidden", ""); },
+};
+window.openCheatSheet = () => cheat.open();
+
+function wireCheat() {
+  const bd = document.getElementById("cheatBackdrop");
+  if (bd) bd.addEventListener("click", () => cheat.close());
+  const c = document.getElementById("cheatClose");
+  if (c) c.addEventListener("click", () => cheat.close());
+}
+
 function wireShare() {
+  wireCheat();
   const btn = document.getElementById("shareBtn");
   const lb = document.getElementById("shareLightbox");
   if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); share.toggle(); });
@@ -1503,7 +1520,7 @@ function _speechText(text) {
 // (Apple / Google / Microsoft / Android), then any en-US voice.
 var COLLEAGUES = {
   harriet: { img: "harriet.avif", name: "Carol Humbug · HR, Force Majeure" }, // (internally still "harriet")
-  haruto: { img: "intern.avif", name: "Jacob · intern, Force Majeure" },
+  haruto: { img: "intern.avif", name: "Jacob · he/him, Force Majeure" },
   daddy: { img: "daddy.avif", name: "Daddy" },
 };
 var HARRIET_VOICES = /female|samantha|zira|aria|jenny|ava|allison|susan|victoria|karen|joanna|salli|kimberly|google us english|en-us-x-(sfg|tpc|iob)/i;
@@ -1913,7 +1930,11 @@ function harutoTurn(text, pre) {
   const call = _call;
   const open = !call.internSpoke; // his opener - a /call topic here is for Fernando, not him
   if (!open && text) call.internReplies++;
-  const final = !open && call.internReplies >= call.internTurns;
+  // the customer named Fernando while Jacob's still holding the line: he wraps
+  // up his small talk and puts Fernando through this turn, instead of waiting
+  // out his remaining intern turns
+  const wantsFernando = !open && !!text && FERNANDO_NAME.test(text);
+  const final = wantsFernando || (!open && call.internReplies >= call.internTurns);
   call.internSpoke = true;
   call.harutoThinking = true;
   callSet('thinking');

@@ -32,8 +32,24 @@
 }
 .ho-title { font-weight: 500; }
 .ho-dot, .ho-timer { color: var(--ho-dim); }
-.ho-rec {
+/* "things to try" trigger, up in the header next to REC - opens the lightbox */
+.ho-tips-btn {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: var(--ho-dim);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.ho-tips-btn:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.ho-tips-btn i { font-size: 10px; }
+.ho-rec {
   font-size: 12px;
   color: var(--ho-red);
   letter-spacing: 0.05em;

@@ -19,9 +19,9 @@
   <meta name="twitter:title" content="WhackGPT">
   <meta name="twitter:description" content="The AI that gives terrible advice with total confidence.">
   <meta name="twitter:image" content="https://www.whackgpt.com/og.jpg">
-  <link rel="stylesheet" href="styles.css?88">
+  <link rel="stylesheet" href="styles.css?89">
   <link rel="stylesheet" href="code-window.css?1">
-  <link rel="stylesheet" href="hangout.css?26">
+  <link rel="stylesheet" href="hangout.css?29">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -142,9 +142,27 @@
       </div>
     </div>
   </div>
+  <!-- "things to try" cheat sheet, opened from the call -->
+  <div class="cheat-lb" id="cheatSheet" hidden>
+    <div class="cheat-lb-backdrop" id="cheatBackdrop"></div>
+    <div class="cheat-lb-card">
+      <div class="cheat-lb-head">
+        <span class="cheat-lb-title">Things to try</span>
+        <button type="button" class="cheat-lb-close" id="cheatClose" title="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <ul class="cheat-list">
+        <li>Fernando can make images, diagrams, documents, videos and websites. Just ask.</li>
+        <li>Ask Jacob for a photo of himself.</li>
+        <li>Accuse Carol of drinking on the job.</li>
+        <li>People answer to their name.</li>
+        <li>Tell Jacob to put Fernando on the line.</li>
+        <li>Press Fernando on who he really is.</li>
+      </ul>
+    </div>
+  </div>
   <div id="snackbar"></div>
   <script src="games.js?6"></script>
-  <script src="hangout.js?32"></script>
-  <script src="script.js?198"></script>
+  <script src="hangout.js?37"></script>
+  <script src="script.js?203"></script>
 </body>
 </html>
