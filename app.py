@@ -3727,17 +3727,20 @@ def _tts_subsection(text, max_words=80):
 KOKORO_BASE = os.environ.get("WHACK_KOKORO", "http://10.0.0.190:8080/v1")
 KOKORO_SPEED = 1.2
 KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_puck", "daddy": "bm_lewis"}
-# Jacob's and Carol's own voices come from a dyva proxy (OpenAI
+# Fernando's, Jacob's and Carol's voices come from a dyva proxy (OpenAI
 # /v1/audio/speech shape, routes to a ComfyUI TTS node, returns host-native
 # audio - WAV/FLAC, not mp3); Kokoro (KOKORO_VOICES) stands in if it fails.
-# Each is its own env block so either can be repointed independently.
+# Each is its own env block so any one can be repointed independently.
 JACOB_TTS_BASE = os.environ.get("WHACK_JACOB_TTS_BASE", "http://10.0.0.1:11434/v1")
 JACOB_TTS_VOICE = os.environ.get("WHACK_JACOB_TTS_VOICE", "Connor")
 CAROL_TTS_BASE = os.environ.get("WHACK_CAROL_TTS_BASE", "http://10.0.0.1:11434/v1")
 CAROL_TTS_VOICE = os.environ.get("WHACK_CAROL_TTS_VOICE", "Ono_anna")
+FERNANDO_TTS_BASE = os.environ.get("WHACK_FERNANDO_TTS_BASE", "http://10.0.0.1:11434/v1")
+FERNANDO_TTS_VOICE = os.environ.get("WHACK_FERNANDO_TTS_VOICE", "Thomas")
 # client voice-key -> (base, voice). Deliberately NO model: the dyva host
 # routes by voice, and sending a model made it pick the wrong backend.
-CHAR_TTS = {"haruto": (JACOB_TTS_BASE, JACOB_TTS_VOICE),
+CHAR_TTS = {"whackgpt": (FERNANDO_TTS_BASE, FERNANDO_TTS_VOICE),
+            "haruto": (JACOB_TTS_BASE, JACOB_TTS_VOICE),
             "harriet": (CAROL_TTS_BASE, CAROL_TTS_VOICE)}
 
 
