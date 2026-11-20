@@ -3727,19 +3727,26 @@ def _tts_subsection(text, max_words=80):
 KOKORO_BASE = os.environ.get("WHACK_KOKORO", "http://10.0.0.190:8080/v1")
 KOKORO_SPEED = 1.2
 KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_puck", "daddy": "bm_lewis"}
-# Jacob's and Carol's own voices: the breeze host is primary, Kokoro
-# (KOKORO_VOICES) stands in if it fails
-JACOB_TTS_BASE = os.environ.get("WHACK_JACOB_TTS_BASE", "http://10.0.0.223:8000/v1")
-JACOB_TTS_MODEL = os.environ.get("WHACK_JACOB_TTS_MODEL", "breeze-tts-2")
-JACOB_TTS_VOICE = os.environ.get("WHACK_JACOB_TTS_VOICE", "air")
-BREEZE_VOICES = {"haruto": JACOB_TTS_VOICE,
-                 "harriet": os.environ.get("WHACK_CAROL_TTS_VOICE", "carol")}
+# Jacob's and Carol's own voices come from a dyva proxy (OpenAI
+# /v1/audio/speech shape, routes to a ComfyUI TTS node, returns host-native
+# audio - WAV/FLAC, not mp3); Kokoro (KOKORO_VOICES) stands in if it fails.
+# Each is its own env block so either can be repointed independently.
+JACOB_TTS_BASE = os.environ.get("WHACK_JACOB_TTS_BASE", "http://10.0.0.1:11434/v1")
+JACOB_TTS_MODEL = os.environ.get("WHACK_JACOB_TTS_MODEL", "qwen3-tts")
+JACOB_TTS_VOICE = os.environ.get("WHACK_JACOB_TTS_VOICE", "Dylan")
+CAROL_TTS_BASE = os.environ.get("WHACK_CAROL_TTS_BASE", "http://10.0.0.1:11434/v1")
+CAROL_TTS_MODEL = os.environ.get("WHACK_CAROL_TTS_MODEL", "qwen3-tts")
+CAROL_TTS_VOICE = os.environ.get("WHACK_CAROL_TTS_VOICE", "Ono_anna")
+# client voice-key -> (base, model, voice) for a character's own host
+CHAR_TTS = {"haruto": (JACOB_TTS_BASE, JACOB_TTS_MODEL, JACOB_TTS_VOICE),
+            "harriet": (CAROL_TTS_BASE, CAROL_TTS_MODEL, CAROL_TTS_VOICE)}
 
 
 @app.post("/speak")
 async def speak(data: dict):
     """Read a reply aloud: {text, voice: "whackgpt" | "harriet" | "haruto"} ->
-    MP3 (Jacob and Carol from the breeze host; Fernando and Daddy from Kokoro).
+    audio (Jacob and Carol from the dyva host, Fernando and Daddy from
+    Kokoro). The dyva host returns WAV, so the reply is not always MP3.
     Only a subsection of a long reply is spoken (keeps the wait short).
     Empty audio on failure - the client then falls back to the browser's
     own speech synthesis."""
@@ -3751,23 +3758,27 @@ async def speak(data: dict):
     # KIDDING" -> I-M N-O-T ...). Lower-case shouted words of 3+ letters;
     # two-letter ones (AI, HR, OK, US) stay as they are.
     text = re.sub(r"\b[A-Z][A-Z'’]{2,}\b", lambda m: m.group(0).lower(), text)
-    # Jacob and Carol have their own voice host (breeze-tts-2, MP3 out);
-    # Kokoro stands in if it fails
-    breeze = BREEZE_VOICES.get(data.get("voice"))
-    if breeze and JACOB_TTS_BASE:
+    # Jacob and Carol each have their own voice config (both on the dyva
+    # proxy by default); Kokoro stands in if the host fails. The host returns
+    # its native audio format (dyva gives WAV), so pass the upstream
+    # Content-Type straight through instead of assuming mp3.
+    custom = CHAR_TTS.get(data.get("voice"))
+    if custom and custom[0]:
+        base, model, cvoice = custom
         try:
             res = await asyncio.to_thread(
                 requests.post,
-                f"{JACOB_TTS_BASE}/audio/speech",
-                json={"model": JACOB_TTS_MODEL, "input": text, "voice": breeze,
+                f"{base}/audio/speech",
+                json={"model": model, "input": text, "voice": cvoice,
                       "response_format": "mp3"},
                 timeout=60.0,
             )
             if res.status_code == 200 and res.content:
-                return Response(content=res.content, media_type="audio/mpeg")
-            print(f"speak: breeze tts host returned {res.status_code} for {breeze} - falling back to kokoro")
+                ctype = res.headers.get("Content-Type") or "audio/mpeg"
+                return Response(content=res.content, media_type=ctype)
+            print(f"speak: tts host {base} returned {res.status_code} for {cvoice} - falling back to kokoro")
         except Exception as e:
-            print(f"speak: breeze tts host failed for {breeze} ({e}) - falling back to kokoro")
+            print(f"speak: tts host {base} failed for {cvoice} ({e}) - falling back to kokoro")
     try:
         res = await asyncio.to_thread(
             requests.post,
