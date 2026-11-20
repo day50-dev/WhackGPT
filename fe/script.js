@@ -1233,7 +1233,7 @@ function isCallEvent(t) {
 // that ends mid-song pauses it, and the next wait RESUMES the same song where
 // it left off; a song that plays to its end moves on to the next one. One reused <audio> element, so mobile autoplay rules
 // unlocked by the first tap keep applying.
-var HOLD_TRACKS = 49, HOLD_VOLUME = 0.4, HOLD_FADE_MS = 400;
+var HOLD_TRACKS = 199, HOLD_VOLUME = 0.35, HOLD_FADE_MS = 400;
 var _hold = null, _holdOn = false, _holdLast = 0, _holdFade = null;
 
 function _holdNext() {
