@@ -3732,14 +3732,13 @@ KOKORO_VOICES = {"whackgpt": "bm_george", "harriet": "af_river", "haruto": "am_p
 # audio - WAV/FLAC, not mp3); Kokoro (KOKORO_VOICES) stands in if it fails.
 # Each is its own env block so either can be repointed independently.
 JACOB_TTS_BASE = os.environ.get("WHACK_JACOB_TTS_BASE", "http://10.0.0.1:11434/v1")
-JACOB_TTS_MODEL = os.environ.get("WHACK_JACOB_TTS_MODEL", "qwen3-tts")
-JACOB_TTS_VOICE = os.environ.get("WHACK_JACOB_TTS_VOICE", "Dylan")
+JACOB_TTS_VOICE = os.environ.get("WHACK_JACOB_TTS_VOICE", "Connor")
 CAROL_TTS_BASE = os.environ.get("WHACK_CAROL_TTS_BASE", "http://10.0.0.1:11434/v1")
-CAROL_TTS_MODEL = os.environ.get("WHACK_CAROL_TTS_MODEL", "qwen3-tts")
 CAROL_TTS_VOICE = os.environ.get("WHACK_CAROL_TTS_VOICE", "Ono_anna")
-# client voice-key -> (base, model, voice) for a character's own host
-CHAR_TTS = {"haruto": (JACOB_TTS_BASE, JACOB_TTS_MODEL, JACOB_TTS_VOICE),
-            "harriet": (CAROL_TTS_BASE, CAROL_TTS_MODEL, CAROL_TTS_VOICE)}
+# client voice-key -> (base, voice). Deliberately NO model: the dyva host
+# routes by voice, and sending a model made it pick the wrong backend.
+CHAR_TTS = {"haruto": (JACOB_TTS_BASE, JACOB_TTS_VOICE),
+            "harriet": (CAROL_TTS_BASE, CAROL_TTS_VOICE)}
 
 
 @app.post("/speak")
@@ -3764,12 +3763,12 @@ async def speak(data: dict):
     # Content-Type straight through instead of assuming mp3.
     custom = CHAR_TTS.get(data.get("voice"))
     if custom and custom[0]:
-        base, model, cvoice = custom
+        base, cvoice = custom
         try:
             res = await asyncio.to_thread(
                 requests.post,
                 f"{base}/audio/speech",
-                json={"model": model, "input": text, "voice": cvoice,
+                json={"input": text, "voice": cvoice,
                       "response_format": "mp3"},
                 timeout=60.0,
             )
