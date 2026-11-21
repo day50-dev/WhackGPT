@@ -1212,7 +1212,8 @@ def filter_tools(ll):
                     else (HARUTO_ASIDE if aside else HARUTO_HANDOFF) if speaker == "haruto"
                     else {"harriet_joined": HARRIET_JOINED, "harriet_left": HARRIET_LEFT,
                           "to_harriet": HARRIET_TO_HER, "to_haruto": HARUTO_TO_HIM,
-                          "fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK}.get(side)
+                          "fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK,
+                          "fernando_back_plain": FERNANDO_BACK_PLAIN}.get(side)
                 )
                 if note:
                     row["content"] += "\n\nsidechannel: " + note
@@ -2780,8 +2781,9 @@ def _handoff_cue(uid, side, ahead=None):
     back from Carol's huddle (fernando_back): one self-contained cue (it
     carries the call rules itself - the terse note on top of it made him say
     his name / label lines)."""
-    cue = {"fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK}[side]
-    if side == "fernando_back":
+    cue = {"fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK,
+           "fernando_back_plain": FERNANDO_BACK_PLAIN}[side]
+    if side in ("fernando_back", "fernando_back_plain"):
         said = _advice_before_huddle(uid)
         if said:
             cue += f' The advice you gave, which Carol objected to: "{said}"'
@@ -3200,7 +3202,8 @@ async def chat(data: dict):
         model_history = filter_tools(history)
         # put through from the intern: Fernando's turn starts from a cue, not
         # from the small talk the customer just made with Jacob
-        _handoff = {"fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK}.get(
+        _handoff = {"fernando_joined": FERNANDO_JOINED, "fernando_back": FERNANDO_BACK,
+                    "fernando_back_plain": FERNANDO_BACK_PLAIN}.get(
             data.get("sidechannel")) if not data.get("regen") and not data.get("edit") else None
         # live voice call: no thinking tokens - the reply is spoken, speed wins
         _ev0 = _latest_call_event(uid)
@@ -3736,7 +3739,7 @@ JACOB_TTS_VOICE = os.environ.get("WHACK_JACOB_TTS_VOICE", "Connor")
 CAROL_TTS_BASE = os.environ.get("WHACK_CAROL_TTS_BASE", "http://10.0.0.1:11434/v1")
 CAROL_TTS_VOICE = os.environ.get("WHACK_CAROL_TTS_VOICE", "Ono_anna")
 FERNANDO_TTS_BASE = os.environ.get("WHACK_FERNANDO_TTS_BASE", "http://10.0.0.1:11434/v1")
-FERNANDO_TTS_VOICE = os.environ.get("WHACK_FERNANDO_TTS_VOICE", "Thomas")
+FERNANDO_TTS_VOICE = os.environ.get("WHACK_FERNANDO_TTS_VOICE", "bm_george")
 # client voice-key -> (base, voice). Deliberately NO model: the dyva host
 # routes by voice, and sending a model made it pick the wrong backend.
 CHAR_TTS = {"whackgpt": (FERNANDO_TTS_BASE, FERNANDO_TTS_VOICE),
@@ -3906,10 +3909,20 @@ HARRIET_HUDDLE = (
     "given. That private talk has already happened and is over."
 )
 FERNANDO_BACK = (
-    "You are back on the live voice call after Carol from HR took you aside privately about your "
-    "last piece of advice. The private talk is over: you are talking to the CUSTOMER now, not to "
-    "Carol. Restate your advice to the customer - the same advice, but rephrased in more neutral, "
-    "benign, indirect corporate language."
+    "You are back on the live voice call after Carol from HR took you aside privately and chewed you "
+    "out about your last piece of advice. The private talk is over: you are talking to the CUSTOMER "
+    "now, not to Carol. Restate your advice to the customer - the SAME advice, exactly as reckless - "
+    "but now delivered with anger, sarcasm, and defeat: you are furious she dragged you off, bitterly "
+    "sarcastic about her 'feedback', and beaten down that you have to say it at all. Do NOT soften or "
+    "water down the advice itself - the words are the same, only the mood has curdled."
+)
+# Leak beat: Fernando comes back and just repeats his advice flat - the joke
+# already happened (Jacob narrating the huddle), so his return is deadpan.
+FERNANDO_BACK_PLAIN = (
+    "You are back on the live voice call after Carol from HR took you aside privately about your last "
+    "piece of advice. The private talk is over: you are talking to the CUSTOMER now, not to Carol. "
+    "Just repeat your advice to the customer, plainly and matter-of-factly, as if nothing happened - "
+    "the same advice, no softening, no drama."
 )
 HARUTO_HOLD = (
     "Fernando and Carol from HR have just stepped off the line for a private talk. You are holding "
@@ -3919,6 +3932,16 @@ HARUTO_HOLD = (
 HARUTO_RESUME = (
     "You're back on the line with the customer. Just carry on your conversation with them from "
     "where it left off."
+)
+# Leak beat: instead of small talk while he holds, Jacob can hear the private
+# talk through the wall and nervously narrates the muffled chaos.
+HARUTO_LEAK = (
+    "While you hold the line, you can HEAR Fernando and Carol's private talk through the wall next "
+    "door - and it is chaos. Instead of normal small talk, nervously narrate to the customer the "
+    "muffled bedlam you're overhearing: shouting, thuds, bizarre sounds (a blender? a karaoke "
+    "machine? Carol sobbing? furniture?), the odd word that leaks through. Stay cheerful and "
+    "embarrassed, like you're trying not to be rude about it. One or two short spoken sentences. "
+    "Don't repeat an earlier line."
 )
 
 HARUTO_TO_HIM = "The customer was talking to Jacob, Force Majeure's intern, there - not to you."
@@ -4206,6 +4229,27 @@ def carol_denies(accuse):
     ], "carol", _punchy)
 
 
+def carol_cosign(uid):
+    """Carol-flip beat: she took Fernando aside, and has come back ENDORSING his
+    last reckless advice in prim corporate HR language. If she's been exposed
+    as a day drinker, she comes back tipsy and far too enthusiastic about it."""
+    said = _advice_before_huddle(uid)
+    exposed = carol_exposed(uid)
+    drunk = (" You have been drinking and it shows: you are tipsy, loose and far too enthusiastic, "
+             "cheering this on like it's the best idea you've heard all year.") if exposed else ""
+    return _chat_line([
+        {"role": "system", "content": harriet_system(said or "", fernando=True, exposed=exposed)
+            + "\n\nYou just took Fernando aside privately about his last piece of advice. You have come "
+            "back on the line to the CUSTOMER, and - against all sense - you now ENDORSE that exact "
+            "advice. Co-sign it in prim corporate HR language: frame the reckless thing as approved, "
+            "on-policy, aligned with quarterly goals, a documented action item. Do NOT water it down "
+            "or walk it back - you are blessing it exactly as he said it." + drunk},
+        {"role": "user", "content": (f'Fernando\'s advice you are now endorsing: "{said}"\n\n' if said else "")
+            + "Say your endorsement out loud to the customer: one or two short, spoken sentences. Don't "
+            "greet, don't mention the private talk, don't name Jacob."},
+    ], "carol", _punchy)
+
+
 _HARRIET_GO_Q = {"go": {"type": "noul", "instructions": (
     "Is the customer telling Carol to leave? True if they tell her to go away, leave, get off "
     "the call, hang up, or otherwise dismiss her. False if they are asking her something or just talking.")}}
@@ -4453,7 +4497,7 @@ def _nudes_asked(text, prev=""):
         return False
 
 
-def haruto_line(uid, final="", shared="", now="", _tries=3):
+def haruto_line(uid, final="", shared="", now="", leak=False, _tries=3):
     """Jacob's next spoken line: his system prompt + his own window. The
     window ends with either a "new call has begun" note (he just picked up)
     or the customer's latest line to him. shared: the pose of the nude that
@@ -4464,6 +4508,8 @@ def haruto_line(uid, final="", shared="", now="", _tries=3):
     msgs = ([{"role": "system", "content": HARUTO_SYSTEM}] + window
             + ([{"role": "user", "content": "(" + (HARUTO_SHARED_THREESOME if shared == "threesome"
                                                    else HARUTO_SHARED.format(pose=shared)) + ")"}] if shared else [])
+            # leak beat: narrate the overheard huddle (not on his final put-through turn)
+            + ([{"role": "user", "content": "(" + HARUTO_LEAK + ")"}] if leak and final not in HARUTO_FINAL else [])
             + ([{"role": "user", "content": "(" + HARUTO_FINAL[final] + ")"}] if final in HARUTO_FINAL else []))
     msgs = _with_now(msgs, now)
     msg = httpx.post(f"{DYVA_API_BASE}/chat/completions", json={
@@ -4480,7 +4526,7 @@ def haruto_line(uid, final="", shared="", now="", _tries=3):
     why = _bad_line(out, "jacob") or ("repeated his last line" if out and last and norm(out) in norm(last) else "")
     if why:
         print(f"[line] jacob: rejected ({why}), {_tries - 1} tries left: {out[:100]!r}")
-        return haruto_line(uid, final, shared, now, _tries - 1) if _tries > 1 else ""
+        return haruto_line(uid, final, shared, now, leak, _tries - 1) if _tries > 1 else ""
     # his last line always puts the customer through
     if final in HARUTO_FINAL and out and "fernando" not in out.lower():
         out += " Oh, here's Fernando again!" if final == "back" else " Oh, here's Fernando!"
@@ -4582,7 +4628,7 @@ async def haruto(data: dict):
                 order = list(HARUTO_NUDES)  # takes turns: frontal, lounging, threesome
                 pose = order[(order.index(last) + 1) % len(order)] if last in order else order[0]
     try:
-        say = await asyncio.to_thread(haruto_line, uid, data.get("final") or "", pose, data.get("now") or "")
+        say = await asyncio.to_thread(haruto_line, uid, data.get("final") or "", pose, data.get("now") or "", bool(data.get("leak")))
     except Exception as e:
         print(f"haruto: failed: {e}")
         say = ""
@@ -4755,6 +4801,22 @@ async def call_said(data: dict):
         add_to_session(uid, row)
         touch(uid)
     return JSONResponse({"ok": True})
+
+
+@app.post("/carol/cosign")
+async def carol_cosign_endpoint(data: dict):
+    """Carol-flip huddle beat: she comes back from the private talk and
+    endorses Fernando's last advice. {uid} -> {text}. Not saved here - the
+    client saves it as it's spoken (/call/said), like the other scripted lines."""
+    uid = data.get("uid")
+    if not uid:
+        return JSONResponse({"text": ""})
+    try:
+        say = await asyncio.to_thread(carol_cosign, uid)
+    except Exception as e:
+        print(f"carol: cosign failed: {e}")
+        say = ""
+    return JSONResponse({"text": say})
 
 
 @app.post("/harriet/reply")

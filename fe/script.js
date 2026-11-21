@@ -1519,7 +1519,7 @@ function _speechText(text) {
 // Voice objects don't say their gender, so prefer known female voice names
 // (Apple / Google / Microsoft / Android), then any en-US voice.
 var COLLEAGUES = {
-  harriet: { img: "harriet.avif", name: "Carol Humbug · HR, Force Majeure" }, // (internally still "harriet")
+  harriet: { img: "harriet.avif", name: "Carol · HR, Force Majeure" }, // (internally still "harriet")
   haruto: { img: "intern.avif", name: "Jacob · he/him, Force Majeure" },
   daddy: { img: "daddy.avif", name: "Daddy" },
 };
@@ -1862,11 +1862,23 @@ function fernandoEarly(call, send, before) {
   };
 }
 
+// How the huddle pays off, rolled once per huddle:
+//   worse - Fernando comes back and restates his advice with anger, sarcasm
+//           and defeat (fernando_back)
+//   carol - Carol comes back and ENDORSES his advice instead (carolReturns)
+//   leak  - Jacob narrates the overheard chaos while he holds, then Fernando
+//           comes back and just repeats the advice flat (fernando_back_plain)
+var HUDDLE_BEATS = ['worse', 'carol', 'leak'];
+function pickHuddleBeat(call) {
+  call.huddleBeat = HUDDLE_BEATS[Math.floor(Math.random() * HUDDLE_BEATS.length)];
+}
+
 // Carol cuts in: a scolding (Fernando answers her once), or - when a score
 // is way over the line - "Fernando, I need to talk to you privately."
 function harrietCutIn(v) {
   const call = _call;
   if (v.huddle) {
+    pickHuddleBeat(call); // decide the payoff before Jacob's opener is fetched
     call.huddleLine = v.text;
     const pre = huddleOpenerFetch(call, call.huddleKind || 'judge', v.text); // Jacob's "they stepped away"
     harrietSpeak(v.text, () => startHuddle(call, pre));
@@ -1880,6 +1892,7 @@ var RAMBLE_WORDS = 100;
 var RAMBLE_LINE = "Fernando, that's quite enough. A word - privately.";
 function carolCutsOff(call) {
   if (_call !== call || !call.harriet) return;
+  pickHuddleBeat(call); // decide the payoff before Jacob's opener is fetched
   call.huddleKind = 'ramble';
   // the server adds an errand for Jacob once she's been exposed as a drinker
   const go = (line) => {
@@ -1894,7 +1907,8 @@ function carolCutsOff(call) {
 
 // Jacob's opener for the huddle, requested while Carol is still saying her line
 function huddleOpenerFetch(call, kind, line) {
-  return postJSON('/haruto', { uid: _uid, text: '', mode: 'open', huddle: kind, huddle_text: line || '', final: '' });
+  return postJSON('/haruto', { uid: _uid, text: '', mode: 'open', huddle: kind, huddle_text: line || '',
+    final: '', leak: call.huddleBeat === 'leak' });
 }
 
 // The private talk: Carol and Fernando go on mute, Jacob takes the line
@@ -1969,6 +1983,7 @@ function harutoTurn(text, pre) {
     huddle: open && call.huddle ? (call.huddleKind || 'judge') : '',
     huddle_text: open && call.huddle ? (call.huddleLine || '') : '',
     final: final ? (call.huddle ? 'back' : 'joined') : '',
+    leak: call.huddle && call.huddleBeat === 'leak', // narrate the overheard huddle
   }))
     .then((v) => done(v.text || '', v.share || ''))
     .catch((e) => { console.log('[haruto] failed', e); done(''); });
@@ -2257,14 +2272,42 @@ function fernandoArrives(call) {
 // talk, he restates his last advice.
 function fernandoJoinsEarly(call) {
   const back = !!call.huddle;
+  // carol beat: she comes back and endorses his advice - Fernando stays quiet
+  if (back && call.huddleBeat === 'carol') return () => carolReturns(call);
+  // worse: angry/sarcastic/defeated restate; leak: flat repeat (the leak was the joke)
+  const cue = back ? (call.huddleBeat === 'leak' ? 'fernando_back_plain' : 'fernando_back') : 'fernando_joined';
   return fernandoEarly(call,
     () => sendMessage('(put through)', undefined, undefined, undefined,
-      { sidechannel: back ? 'fernando_back' : 'fernando_joined', silent: true }),
+      { sidechannel: cue, silent: true }),
     () => { fernandoArrives(call); if (back) call.restating = true; });
 }
 function fernandoJoins(call) {
   if (_call !== call) return;
   fernandoJoinsEarly(call)();
+}
+
+// Carol beat: she comes back from the huddle and co-signs Fernando's last
+// advice in prim HR language (tipsy and all-in if she's been exposed as a
+// drunk). Fernando stays quiet; then it's the customer's turn.
+function carolReturns(call) {
+  if (_call !== call) return;
+  fernandoArrives(call); // Jacob goes quiet, Carol and Fernando are "back"
+  const yours = () => { if (_call === call) { call.heard = ''; callSet('listening'); } };
+  call.harrietThinking = true;
+  callSet('thinking');
+  postJSON('/carol/cosign', { uid: _uid })
+    .then((v) => {
+      call.harrietThinking = false;
+      if (_call !== call) return;
+      if (!v.text) { yours(); return; }
+      lineSaid('harriet', v.text); // saved as it's spoken (/call/said)
+      harrietSpeak(v.text, yours);
+    })
+    .catch((e) => {
+      console.log('[carol] cosign failed', e);
+      call.harrietThinking = false;
+      if (_call === call) yours();
+    });
 }
 
 // The user said "Harriet": she answers them herself (WhackGPT gets no turn).

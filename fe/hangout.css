@@ -253,7 +253,7 @@
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  max-width: 80vw;
+  max-width: 800px; /* match the normal .message column width */
   margin: 8px 0;
   padding: 10px 12px;
   border-radius: 12px;

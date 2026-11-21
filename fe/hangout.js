@@ -165,7 +165,7 @@ var Hangout = (function () {
           '<div class="ho-name"><span class="ho-ai-name">Fernando</span> <i class="fas fa-microphone ho-mic"></i></div>' +
         '</div>' +
         '<div class="ho-tile ho-harriet">' +
-          '<img class="ho-face" src="harriet.avif" alt="Carol Humbug">' +
+          '<img class="ho-face" src="harriet.avif" alt="Carol">' +
           '<div class="ho-name">Carol · HR <i class="fas fa-microphone ho-mic"></i></div>' +
         '</div>' +
         '<div class="ho-tile ho-haruto">' +
@@ -290,8 +290,8 @@ var Hangout = (function () {
       mute.innerHTML = p === "muted" ? '<i class="fas fa-microphone-slash"></i>' : '<i class="fas fa-microphone"></i>';
     },
     isOpen() { return open; },
-    harrietJoined() { this._toast("Carol Humbug (HR, Force Majeure) joined the call"); },
-    harrietLeft() { this._toast("Carol Humbug left the call"); },
+    harrietJoined() { this._toast("Carol (HR, Force Majeure) joined the call"); },
+    harrietLeft() { this._toast("Carol left the call"); },
     fernandoJoined() { this._toast("Fernando joined the call"); },
     _toast(msg) {
       if (!open) return;
